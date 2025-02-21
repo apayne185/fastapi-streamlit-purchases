@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pandas
+python-multipart
+pydantic
+sklearn 
+numpy
+collections
+statsmodels

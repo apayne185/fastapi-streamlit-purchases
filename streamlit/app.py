@@ -40,7 +40,12 @@ if tab == "Upload a Purchase":
     if uploaded_file:
         if st.button("Upload CSV"):
             file = {"file": uploaded_file.getvalue()}
-            response = requests.post(f"{API_URL}/purchase/bulk", file=file)
+            response = requests.post(
+                f"{API_URL}/purchase/bulk/",
+                files={"file": ("purchases.csv", uploaded_file.read(),"text/csv")}
+            )   
+
+
             if response.status_code == 200:
                 st.success(f"Purchase added succesfully: {response.json()['added']} purchases")
             else:
@@ -80,17 +85,45 @@ elif tab == "Analyze a Purchase":
     else:
         st.error("Failed to fetch data") 
 
+  
+
+
 
     st.subheader("KPIs")
-    forecast_days = st.number_input("Forecast Sales: ", min_value=1, max_value=30, value=5)
+    forecast_days = st.number_input("Forecast Sales (in Days): ", min_value=1, max_value=30, value=5)
 
     if st.button("Compute KPIs"):
         response = requests.get(f"{API_URL}/purchases/kpis/", params={"forecast_days": forecast_days})
         if response.status_code == 200:
             kpi_data = response.json()
-            st.json(kpi_data)
+            # st.write("Raw API Response:", kpi_data)
+
+            st.subheader("Average Purchases Per Client")
+            if kpi_data.get("mean_purchases_per_client"):   
+                df_clients = pd.DataFrame(kpi_data["mean_purchases_per_client"].items(),columns=["Client", "Average Purchase ($)"])
+                st.dataframe(df_clients.style.format({"Average Purchase ($)": "${:,.2f}"}))
+            else: 
+                st.warning("No purchase data available.")  
+     
+
+            st.subheader("Clients Per Country")
+            if kpi_data.get("clients_per_country"):
+                df_countries = pd.DataFrame(kpi_data["clients_per_country"].items(), columns=["Country", "Number of Clients"])   
+                st.dataframe(df_countries)
+            else: 
+                st.warning("No country data available.")  
+
+             
+            if kpi_data.get("sales_forecast") and kpi_data["sales_forecast"] != "Not requested": 
+                st.subheader(f"Sales Forecast for Next {forecast_days} Days")
+                df_forecast = pd.DataFrame(list(kpi_data["sales_forecast"].items()), columns=["Day", "Projected Sales ($)"])   
+                st.dataframe(df_forecast.style.format({"Projected Sales ($)": "${:,.2f}"}))   
+            else: 
+                st.info("No sles forecast requested.") 
+                
+        
         else:
-            st.error("Failed to fetch KPIs")
+            st.error("Failed to fetch KPIs")  
 
 
 
