@@ -44,7 +44,8 @@ async def add_bulk_purchases(file: UploadFile = File(...)):
             purchase = Purchase(
                 customer_name=row["customer_name"].strip(),
                 country=row["country"].strip(),
-                purchase_date=datetime.strptime(row["purchase_date"].strip(), "%d/%m/%Y").date(),
+                # purchase_date=datetime.strptime(row["purchase_date"].strip(), "%d/%m/%Y").date(),
+                purchase_date=datetime.strptime(row["purchase_date"].strip(), "%Y-%m-%d").date(),
                 amount=float(row["amount"].strip())
             )
             purchases.append(purchase)

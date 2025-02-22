@@ -5,6 +5,5 @@ python-multipart
 pydantic
 scikit-learn  
 numpy
-collections
 statsmodels
 

@@ -32,10 +32,13 @@ A system with three components:
 ### Running with Docker Compose
 
 To build and start the Streamlit UI and the FastAPI, run:
+
 ```docker-compose up --build```
+
 This will start the backend on  `http://localhost:8000` and the frontend on `http://localhost:8501`.   To acess the website, enter `http://localhost:8501` into your search engine. 
 
 To stop the services, run: 
+
 ```docker-compose down```
 
 
