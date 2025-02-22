@@ -56,17 +56,17 @@ async def add_bulk_purchases(file: UploadFile = File(...)):
 
 
 
-@app.delete("/purchase/{customer_name}")
-def delete_purchase(customer_name: str):
-    global purchases
-    filtered_purchases = [p for p in purchases if p.customer_name != customer_name]
+# @app.delete("/purchase/{customer_name}")
+# def delete_purchase(customer_name: str):
+#     global purchases
+#     filtered_purchases = [p for p in purchases if p.customer_name != customer_name]
 
-    if len(filtered_purchases) == len(purchases):
-        raise HTTPException(status_code=404, detail="Customer not found")
+#     if len(filtered_purchases) == len(purchases):
+#         raise HTTPException(status_code=404, detail="Customer not found")
     
-    purchases = filtered_purchases
+#     purchases = filtered_purchases
 
-    return {"message": f"All purchases by {customer_name} have been deleted."}
+#     return {"message": f"All purchases by {customer_name} have been deleted."}
 
 
 

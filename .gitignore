@@ -1,3 +1,4 @@
 streamlit/streamlit_venv/
 fastapi/venv/
 fastapi/__pycache__
+.pytest_cache
