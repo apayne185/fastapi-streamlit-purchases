@@ -1,2 +1,2 @@
-streamlit/streamlit_venv
-fastapi/venv
+streamlit/streamlit_venv/
+fastapi/venv/
