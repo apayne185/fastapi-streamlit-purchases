@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import pandas as pd
 
-API_URL =  "http://localhost:8000"
+API_URL = "http://fastapi:8000"
 
 st.set_page_config(page_title="Customers Purchases", layout="wide")
 st.sidebar.title("Naviagtion")
@@ -38,18 +38,22 @@ if tab == "Upload a Purchase":
     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])  
 
     if uploaded_file:
+        file_content = uploaded_file.read()
         if st.button("Upload CSV"):
-            file = {"file": uploaded_file.getvalue()}
+            # file = {"file": uploaded_file.getvalue()}
+            file = {"file": ("purchases.csv", file_content, "text/csv")}
+
             response = requests.post(
                 f"{API_URL}/purchase/bulk/",
-                files={"file": ("purchases.csv", uploaded_file.read(),"text/csv")}
+                # files={"file": ("purchases.csv", uploaded_file.read(),"text/csv")}
+                files=file
             )   
 
 
             if response.status_code == 200:
                 st.success(f"Purchase added succesfully: {response.json()['added']} purchases")
             else:
-                st.error(f"Upload Failed")
+                st.error(f"Upload Failed: {response.text}")
 
         
 
