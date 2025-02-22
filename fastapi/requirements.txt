@@ -3,7 +3,7 @@ uvicorn
 pandas
 python-multipart
 pydantic
-sklearn 
+scikit-learn  
 numpy
 collections
 statsmodels
