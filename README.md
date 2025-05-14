@@ -22,7 +22,7 @@ A system with three components:
 3. **Dockerization**  
    - Containerizes both the FastAPI and Streamlit applications.
 
-
+---
 
 ## Requirements
 1. Install Docker 
