@@ -5,56 +5,99 @@ import pandas as pd
 
 API_URL = os.getenv("API_URL", "http://fastapi:8000")
 
-st.set_page_config(page_title="Customer Purchases", layout="wide")
-st.sidebar.title("Navigation")
-tab = st.sidebar.radio("Go to:", ["Upload a Purchase", "Analyze Purchases"])
+st.set_page_config(page_title="Customer Purchases", page_icon="assets/icon.png" if os.path.exists("assets/icon.png") else None, layout="wide")
+
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+st.sidebar.title("Customer Purchases")
+st.sidebar.caption("Purchase analytics and management platform")
+st.sidebar.divider()
+tab = st.sidebar.radio("Navigate", ["Upload Purchases", "Analyze Purchases"])
+st.sidebar.divider()
+st.sidebar.caption(f"API: `{API_URL}`")
+
+
+def api_get(path, params=None):
+    try:
+        return requests.get(f"{API_URL}{path}", params=params, timeout=10)
+    except requests.exceptions.ConnectionError:
+        st.error("Cannot reach the API. Is the backend running?")
+        st.stop()
+
+
+def api_post(path, **kwargs):
+    try:
+        return requests.post(f"{API_URL}{path}", timeout=10, **kwargs)
+    except requests.exceptions.ConnectionError:
+        st.error("Cannot reach the API. Is the backend running?")
+        st.stop()
 
 
 # ── Tab 1: Upload ──────────────────────────────────────────────────────────────
-if tab == "Upload a Purchase":
+if tab == "Upload Purchases":
     st.title("Upload Purchases")
-    st.subheader("Add Single Purchase")
 
-    if "form_key" not in st.session_state:
-        st.session_state.form_key = 0
+    col_single, col_bulk = st.columns(2, gap="large")
 
-    with st.form(key=f"purchase_form_{st.session_state.form_key}"):
-        customer_name = st.text_input("Name")
-        country = st.text_input("Country")
-        purchase_date = st.date_input("Purchase Date")
-        amount = st.number_input("Amount ($)", min_value=0.01)
-        submit = st.form_submit_button("Submit Purchase")
+    with col_single:
+        st.subheader("Single Purchase")
 
-    if submit:
-        payload = {
-            "customer_name": customer_name,
-            "country": country,
-            "purchase_date": str(purchase_date),
-            "amount": amount,
-        }
-        response = requests.post(f"{API_URL}/purchase/", json=payload)
-        if response.status_code == 200:
-            st.success("Purchase added successfully")
-            st.session_state.form_key += 1
-            st.rerun()
-        else:
-            st.error(f"Error: {response.json()}")
+        if "form_key" not in st.session_state:
+            st.session_state.form_key = 0
 
-    st.subheader("Bulk Upload (CSV)")
-    st.caption("CSV must have columns: `customer_name, country, purchase_date (YYYY-MM-DD), amount`")
-    uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
+        customer_name = st.text_input("Customer Name", key=f"name_{st.session_state.form_key}")
+        country = st.text_input("Country", key=f"country_{st.session_state.form_key}")
+        purchase_date = st.date_input("Purchase Date", key=f"date_{st.session_state.form_key}")
+        amount = st.number_input("Amount ($)", min_value=0.01, format="%.2f", key=f"amount_{st.session_state.form_key}")
 
-    if uploaded_file:
-        file_content = uploaded_file.read()
-        if st.button("Upload CSV"):
-            response = requests.post(
-                f"{API_URL}/purchase/bulk/",
-                files={"file": ("purchases.csv", file_content, "text/csv")},
-            )
+        fields_valid = bool(customer_name.strip() and country.strip())
+        if not fields_valid:
+            st.caption("Customer name and country are required.")
+
+        submit = st.button(
+            "Submit Purchase",
+            use_container_width=True,
+            type="primary",
+            disabled=not fields_valid,
+        )
+
+        if submit:
+            with st.spinner("Saving..."):
+                response = api_post(
+                    "/purchase/",
+                    json={
+                        "customer_name": customer_name.strip(),
+                        "country": country.strip(),
+                        "purchase_date": str(purchase_date),
+                        "amount": amount,
+                    },
+                )
             if response.status_code == 200:
-                st.success(f"Uploaded successfully: {response.json()['added']} purchases added")
+                st.success("Purchase saved successfully")
+                st.session_state.form_key += 1
+                st.rerun()
             else:
-                st.error(f"Upload failed: {response.text}")
+                st.error(f"Error: {response.json()}")
+
+    with col_bulk:
+        st.subheader("Bulk Upload (CSV)")
+        st.caption("Required columns: `customer_name`, `country`, `purchase_date` (YYYY-MM-DD), `amount`")
+        uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
+
+        if uploaded_file:
+            preview = pd.read_csv(uploaded_file)
+            st.dataframe(preview.head(5), use_container_width=True)
+            uploaded_file.seek(0)
+
+            if st.button("Upload", use_container_width=True, type="primary"):
+                with st.spinner(f"Uploading {len(preview)} rows..."):
+                    response = api_post(
+                        "/purchase/bulk/",
+                        files={"file": ("purchases.csv", uploaded_file.read(), "text/csv")},
+                    )
+                if response.status_code == 200:
+                    st.success(f"Successfully uploaded {response.json()['added']} purchases")
+                else:
+                    st.error(f"Upload failed: {response.text}")
 
 
 # ── Tab 2: Analyse ─────────────────────────────────────────────────────────────
@@ -63,12 +106,13 @@ elif tab == "Analyze Purchases":
 
     # Filters
     with st.expander("Filters", expanded=True):
-        country_filter = st.text_input("Filter by Country")
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
-            start_date = st.date_input("Start Date", value=None)
+            country_filter = st.text_input("Country")
         with col2:
-            end_date = st.date_input("End Date", value=None)
+            start_date = st.date_input("From", value=None)
+        with col3:
+            end_date = st.date_input("To", value=None)
 
     params = {}
     if country_filter:
@@ -78,7 +122,8 @@ elif tab == "Analyze Purchases":
     if end_date:
         params["end_date"] = str(end_date)
 
-    response = requests.get(f"{API_URL}/purchases/", params=params)
+    with st.spinner("Loading purchases..."):
+        response = api_get("/purchases/", params=params)
 
     if response.status_code != 200:
         st.error("Failed to fetch data")
@@ -87,7 +132,7 @@ elif tab == "Analyze Purchases":
     data = response.json()
 
     if not data:
-        st.warning("No purchases found for the selected filters")
+        st.info("No purchases found for the selected filters.")
         st.stop()
 
     df = pd.DataFrame(data)
@@ -95,16 +140,12 @@ elif tab == "Analyze Purchases":
     df["amount"] = df["amount"].astype(float)
 
     # ── Summary metrics ────────────────────────────────────────────────────────
-    total_revenue = df["amount"].sum()
-    total_purchases = len(df)
-    avg_order = df["amount"].mean()
-    unique_customers = df["customer_name"].nunique()
-
+    st.caption(f"Showing {len(df):,} purchase{'s' if len(df) != 1 else ''}")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Revenue", f"${total_revenue:,.2f}")
-    m2.metric("Total Purchases", total_purchases)
-    m3.metric("Avg Order Value", f"${avg_order:,.2f}")
-    m4.metric("Unique Customers", unique_customers)
+    m1.metric("Total Revenue", f"${df['amount'].sum():,.2f}")
+    m2.metric("Total Purchases", f"{len(df):,}")
+    m3.metric("Avg Order Value", f"${df['amount'].mean():,.2f}")
+    m4.metric("Unique Customers", f"{df['customer_name'].nunique():,}")
 
     st.divider()
 
@@ -117,78 +158,83 @@ elif tab == "Analyze Purchases":
             df.groupby("country")["amount"]
             .sum()
             .sort_values(ascending=False)
-            .reset_index()
-            .rename(columns={"country": "Country", "amount": "Revenue ($)"})
+            .rename("Revenue ($)")
         )
-        st.bar_chart(country_revenue.set_index("Country"))
+        st.bar_chart(country_revenue)
 
     with chart_col2:
         st.subheader("Revenue Over Time")
         daily_revenue = (
             df.groupby("purchase_date")["amount"]
             .sum()
-            .reset_index()
-            .rename(columns={"purchase_date": "Date", "amount": "Revenue ($)"})
+            .rename("Revenue ($)")
         )
-        st.line_chart(daily_revenue.set_index("Date"))
+        st.line_chart(daily_revenue)
 
     st.subheader("Top 10 Customers by Spend")
     top_customers = (
         df.groupby("customer_name")["amount"]
         .sum()
         .nlargest(10)
-        .reset_index()
-        .rename(columns={"customer_name": "Customer", "amount": "Total Spend ($)"})
+        .rename("Total Spend ($)")
     )
-    st.bar_chart(top_customers.set_index("Customer"))
+    st.bar_chart(top_customers)
 
     st.divider()
 
-    # ── Raw data table ─────────────────────────────────────────────────────────
-    with st.expander("Raw Data", expanded=False):
-        st.dataframe(df, use_container_width=True)
+    with st.expander("Raw Data Table"):
+        st.dataframe(
+            df.style.format({"amount": "${:,.2f}"}),
+            use_container_width=True,
+        )
+        st.download_button(
+            label="Download as CSV",
+            data=df.to_csv(index=False),
+            file_name="purchases_export.csv",
+            mime="text/csv",
+        )
 
     # ── KPIs & Forecast ────────────────────────────────────────────────────────
     st.subheader("KPIs & Sales Forecast")
     forecast_days = st.number_input("Forecast horizon (days):", min_value=1, max_value=30, value=5)
 
-    if st.button("Compute KPIs"):
-        kpi_resp = requests.get(f"{API_URL}/purchases/kpis", params={"forecast_days": forecast_days})
+    if st.button("Compute KPIs", type="primary"):
+        with st.spinner("Computing..."):
+            kpi_resp = api_get("/purchases/kpis", params={"forecast_days": forecast_days})
+
         if kpi_resp.status_code != 200:
-            st.error("Failed to fetch KPIs")
+            st.error(f"Failed to fetch KPIs: {kpi_resp.text}")
             st.stop()
 
         kpi = kpi_resp.json()
-
         kpi_col1, kpi_col2 = st.columns(2)
 
         with kpi_col1:
             st.subheader("Avg Purchase per Client")
             if kpi.get("mean_purchases_per_client"):
-                df_clients = pd.DataFrame(
-                    kpi["mean_purchases_per_client"].items(),
-                    columns=["Client", "Avg Purchase ($)"],
-                ).sort_values("Avg Purchase ($)", ascending=False)
+                df_clients = (
+                    pd.DataFrame(kpi["mean_purchases_per_client"].items(), columns=["Client", "Avg ($)"])
+                    .sort_values("Avg ($)", ascending=False)
+                )
                 st.dataframe(
-                    df_clients.style.format({"Avg Purchase ($)": "${:,.2f}"}),
+                    df_clients.style.format({"Avg ($)": "${:,.2f}"}),
                     use_container_width=True,
                 )
 
         with kpi_col2:
             st.subheader("Clients per Country")
             if kpi.get("clients_per_country"):
-                df_countries = pd.DataFrame(
-                    kpi["clients_per_country"].items(),
-                    columns=["Country", "Clients"],
-                ).sort_values("Clients", ascending=False)
+                df_countries = (
+                    pd.DataFrame(kpi["clients_per_country"].items(), columns=["Country", "Clients"])
+                    .sort_values("Clients", ascending=False)
+                )
                 st.dataframe(df_countries, use_container_width=True)
                 st.bar_chart(df_countries.set_index("Country"))
 
         if kpi.get("sales_forecast") and kpi["sales_forecast"] != "Not requested":
             st.subheader(f"Sales Forecast — Next {forecast_days} Days")
             df_forecast = pd.DataFrame(
-                kpi["sales_forecast"].items(),
-                columns=["Day", "Projected Revenue ($)"],
+                kpi["sales_forecast"].items(), columns=["Day", "Projected Revenue ($)"]
             )
             st.line_chart(df_forecast.set_index("Day"))
             st.dataframe(
