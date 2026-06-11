@@ -43,12 +43,13 @@ def sample_purchase():
         "country": "USA",
         "purchase_date": str(date.today()),
         "amount": 150.50,
+        "currency": "USD",
     }
 
 
 @pytest.fixture
 def sample_csv():
-    csv_data = "customer_name,country,purchase_date,amount\nAlice Person,Canada,2024-12-05,250.75\nBob Smith,UK,2024-12-06,320.40"
+    csv_data = "customer_name,country,purchase_date,amount,currency\nAlice Person,Canada,2024-12-05,250.75,CAD\nBob Smith,UK,2024-12-06,320.40,GBP"
     return csv_data.encode("utf-8")
 
 

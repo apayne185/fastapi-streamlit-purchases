@@ -48,6 +48,14 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    # Non-destructive migration: add currency column if upgrading from older schema
+    with engine.begin() as conn:
+        try:
+            conn.execute(text(
+                "ALTER TABLE purchases ADD COLUMN IF NOT EXISTS currency VARCHAR(3) DEFAULT 'USD'"
+            ))
+        except Exception:
+            pass
     logger.info("Database tables ready")
     yield
 
@@ -59,12 +67,15 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 Instrumentator().instrument(app).expose(app)
 
 
+SUPPORTED_CURRENCIES = {"USD","EUR","GBP","JPY","CAD","AUD","CHF","SEK","NOK","DKK"}
+
 # --- Pydantic schema ---
 class Purchase(BaseModel):
     customer_name: str
     country: str
     purchase_date: date
     amount: float
+    currency: str = "USD"
 
     model_config = {"from_attributes": True}
 
@@ -87,11 +98,14 @@ def readiness_check(db: Session = Depends(get_db)):
 # --- Purchase endpoints ---
 @app.post("/purchase/", response_model=Purchase)
 def add_purchase(purchase: Purchase, db: Session = Depends(get_db)):
-    record = PurchaseRecord(**purchase.model_dump())
+    currency = purchase.currency.upper()
+    if currency not in SUPPORTED_CURRENCIES:
+        raise HTTPException(status_code=400, detail=f"Unsupported currency: {currency}")
+    record = PurchaseRecord(**{**purchase.model_dump(), "currency": currency})
     db.add(record)
     db.commit()
     db.refresh(record)
-    logger.info(f"Purchase added: customer={purchase.customer_name} amount={purchase.amount}")
+    logger.info(f"Purchase added: customer={purchase.customer_name} amount={purchase.amount} currency={currency}")
     return record
 
 
@@ -106,11 +120,15 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends
     new_records = []
     for row in reader:
         try:
+            raw_currency = (row.get("currency") or "USD").strip().upper()
+            if raw_currency not in SUPPORTED_CURRENCIES:
+                raw_currency = "USD"
             record = PurchaseRecord(
                 customer_name=row["customer_name"].strip(),
                 country=row["country"].strip(),
                 purchase_date=datetime.strptime(row["purchase_date"].strip(), "%Y-%m-%d").date(),
                 amount=float(row["amount"].strip()),
+                currency=raw_currency,
             )
             db.add(record)
             new_records.append(record)

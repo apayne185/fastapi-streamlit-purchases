@@ -3,6 +3,21 @@ import streamlit as st
 import requests
 import pandas as pd
 
+CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "SEK", "NOK", "DKK"]
+
+# Illustrative static rates vs USD (not live)
+RATES_TO_USD = {
+    "USD": 1.00, "EUR": 1.08, "GBP": 1.27, "JPY": 0.0067,
+    "CAD": 0.74, "AUD": 0.65, "CHF": 1.13, "SEK": 0.095,
+    "NOK": 0.094, "DKK": 0.145,
+}
+
+def to_usd(amount: float, currency: str) -> float:
+    return amount * RATES_TO_USD.get(currency, 1.0)
+
+def convert(amount_usd: float, target: str) -> float:
+    return amount_usd / RATES_TO_USD.get(target, 1.0)
+
 API_URL = os.getenv("API_URL", "http://fastapi:8000")
 
 st.set_page_config(page_title="Customer Purchases", page_icon="assets/icon.png" if os.path.exists("assets/icon.png") else None, layout="wide")
@@ -57,7 +72,11 @@ if tab == "Upload Purchases":
             st.markdown(_err, unsafe_allow_html=True)
 
         purchase_date = st.date_input("Purchase Date", key=f"date_{st.session_state.form_key}")
-        amount = st.number_input("Amount ($)", min_value=0.01, format="%.2f", key=f"amount_{st.session_state.form_key}")
+        amt_col, cur_col = st.columns([3, 1])
+        with amt_col:
+            amount = st.number_input("Amount", min_value=0.01, format="%.2f", key=f"amount_{st.session_state.form_key}")
+        with cur_col:
+            currency = st.selectbox("Currency", CURRENCIES, key=f"currency_{st.session_state.form_key}")
 
         submit = st.button("Submit Purchase", use_container_width=True, type="primary")
 
@@ -75,10 +94,11 @@ if tab == "Upload Purchases":
                             "country": country.strip(),
                             "purchase_date": str(purchase_date),
                             "amount": amount,
+                            "currency": currency,
                         },
                     )
                 if response.status_code == 200:
-                    st.success("Purchase saved successfully")
+                    st.success(f"Purchase saved — {currency} {amount:,.2f}")
                     st.session_state.form_key += 1
                     st.session_state.submit_attempted = False
                     st.rerun()
@@ -110,6 +130,13 @@ if tab == "Upload Purchases":
 # ── Tab 2: Analyse ─────────────────────────────────────────────────────────────
 elif tab == "Analyze Purchases":
     st.title("Analyze Purchases")
+
+    # Display currency
+    display_currency = st.selectbox(
+        "Display currency",
+        CURRENCIES,
+        help="All amounts are converted to this currency for display. Rates are illustrative, not live.",
+    )
 
     # Filters
     with st.expander("Filters", expanded=True):
@@ -145,13 +172,22 @@ elif tab == "Analyze Purchases":
     df = pd.DataFrame(data)
     df["purchase_date"] = pd.to_datetime(df["purchase_date"])
     df["amount"] = df["amount"].astype(float)
+    if "currency" not in df.columns:
+        df["currency"] = "USD"
+
+    # Convert all amounts to the selected display currency via USD as base
+    df["amount_display"] = df.apply(
+        lambda r: convert(to_usd(r["amount"], r["currency"]), display_currency), axis=1
+    )
+
+    sym = display_currency
 
     # ── Summary metrics ────────────────────────────────────────────────────────
-    st.caption(f"Showing {len(df):,} purchase{'s' if len(df) != 1 else ''}")
+    st.caption(f"Showing {len(df):,} purchase{'s' if len(df) != 1 else ''} — amounts in {display_currency}")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Revenue", f"${df['amount'].sum():,.2f}")
+    m1.metric("Total Revenue", f"{sym} {df['amount_display'].sum():,.2f}")
     m2.metric("Total Purchases", f"{len(df):,}")
-    m3.metric("Avg Order Value", f"${df['amount'].mean():,.2f}")
+    m3.metric("Avg Order Value", f"{sym} {df['amount_display'].mean():,.2f}")
     m4.metric("Unique Customers", f"{df['customer_name'].nunique():,}")
 
     st.divider()
@@ -160,38 +196,43 @@ elif tab == "Analyze Purchases":
     chart_col1, chart_col2 = st.columns(2)
 
     with chart_col1:
-        st.subheader("Revenue by Country")
+        st.subheader(f"Revenue by Country ({display_currency})")
         country_revenue = (
-            df.groupby("country")["amount"]
+            df.groupby("country")["amount_display"]
             .sum()
             .sort_values(ascending=False)
-            .rename("Revenue ($)")
+            .rename(f"Revenue ({display_currency})")
         )
         st.bar_chart(country_revenue)
 
     with chart_col2:
-        st.subheader("Revenue Over Time")
+        st.subheader(f"Revenue Over Time ({display_currency})")
         daily_revenue = (
-            df.groupby("purchase_date")["amount"]
+            df.groupby("purchase_date")["amount_display"]
             .sum()
-            .rename("Revenue ($)")
+            .rename(f"Revenue ({display_currency})")
         )
         st.line_chart(daily_revenue)
 
-    st.subheader("Top 10 Customers by Spend")
+    st.subheader(f"Top 10 Customers ({display_currency})")
     top_customers = (
-        df.groupby("customer_name")["amount"]
+        df.groupby("customer_name")["amount_display"]
         .sum()
         .nlargest(10)
-        .rename("Total Spend ($)")
+        .rename(f"Total Spend ({display_currency})")
     )
     st.bar_chart(top_customers)
 
     st.divider()
 
     with st.expander("Raw Data Table"):
+        display_df = df[["customer_name", "country", "purchase_date", "amount", "currency", "amount_display"]].copy()
+        display_df = display_df.rename(columns={"amount_display": f"amount ({display_currency})"})
         st.dataframe(
-            df.style.format({"amount": "${:,.2f}"}),
+            display_df.style.format({
+                "amount": "{:,.2f}",
+                f"amount ({display_currency})": "{:,.2f}",
+            }),
             use_container_width=True,
         )
         st.download_button(
