@@ -1,9 +1,9 @@
+import os
 import streamlit as st
 import requests
 import pandas as pd
 
-#endpoint URL
-API_URL = "http://fastapi:8000"
+API_URL = os.getenv("API_URL", "http://fastapi:8000")
 
 #streamlit page settings
 st.set_page_config(page_title="Customers Purchases", layout="wide")

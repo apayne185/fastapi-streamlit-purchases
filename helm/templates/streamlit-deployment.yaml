@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: streamlit
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.streamlit.replicas }}
+  selector:
+    matchLabels:
+      app: streamlit
+  template:
+    metadata:
+      labels:
+        app: streamlit
+    spec:
+      containers:
+        - name: streamlit
+          image: {{ .Values.streamlit.image }}:{{ .Values.streamlit.tag }}
+          ports:
+            - containerPort: 8501
+          env:
+            - name: API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: purchases-config
+                  key: API_URL
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: {{ .Values.streamlit.resources.requests.cpu }}
+              memory: {{ .Values.streamlit.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.streamlit.resources.limits.cpu }}
+              memory: {{ .Values.streamlit.resources.limits.memory }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: streamlit-service
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app: streamlit
+  ports:
+    - port: 8501
+      targetPort: 8501
