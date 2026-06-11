@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: purchases-config
+  namespace: {{ .Values.namespace }}
+data:
+  POSTGRES_DB: purchases
+  DATABASE_URL: postgresql://postgres:{{ .Values.postgres.password }}@postgres-service:5432/purchases
+  API_URL: http://fastapi-service:8000

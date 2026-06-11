@@ -1,0 +1,41 @@
+namespace: purchases
+
+fastapi:
+  image: ghcr.io/apayne185/purchases-fastapi
+  tag: latest
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  hpa:
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+
+streamlit:
+  image: ghcr.io/apayne185/purchases-streamlit
+  tag: latest
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+postgres:
+  image: postgres:15-alpine
+  password: postgres
+  storage: 1Gi
+
+ingress:
+  enabled: true
+  className: nginx
+  uiHost: purchases.local
+  apiHost: api.purchases.local

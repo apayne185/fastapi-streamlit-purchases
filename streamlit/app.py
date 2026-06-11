@@ -1,9 +1,9 @@
+import os
 import streamlit as st
 import requests
 import pandas as pd
 
-#endpoint URL
-API_URL = "http://fastapi:8000"
+API_URL = os.getenv("API_URL", "http://fastapi:8000")
 
 #streamlit page settings
 st.set_page_config(page_title="Customers Purchases", layout="wide")
@@ -11,17 +11,20 @@ st.sidebar.title("Naviagtion")
 tab = st.sidebar.radio("Go to:", ["Upload a Purchase", "Analyze a Purchase"])
 
 
-# Tab 1 
-if tab == "Upload a Purchase":         #upload a single purchase 
+# Tab 1
+if tab == "Upload a Purchase":         #upload a single purchase
     st.title('Upload Purchases')
     st.subheader("Add Purchase")
-    
-    with st.form("purchase_form"):
-        customer_name = st.text_input("Name") 
-        country = st.text_input("Country")  
-        purchase_date = st.date_input("Purchase Date") 
-        amount = st.number_input("Amount", min_value=0.01)  
-        submit = st.form_submit_button("Submit Purchase")   
+
+    if "form_key" not in st.session_state:
+        st.session_state.form_key = 0
+
+    with st.form(key=f"purchase_form_{st.session_state.form_key}"):
+        customer_name = st.text_input("Name")
+        country = st.text_input("Country")
+        purchase_date = st.date_input("Purchase Date")
+        amount = st.number_input("Amount", min_value=0.01)
+        submit = st.form_submit_button("Submit Purchase")
 
     # handle purchase form submission
     if submit:
@@ -33,9 +36,10 @@ if tab == "Upload a Purchase":         #upload a single purchase
         }
         response = requests.post(f"{API_URL}/purchase/", json=payload)
 
-        #feedback on API response
         if response.status_code == 200:
-            st.success("Purchase added succesfully")
+            st.success("Purchase added successfully")
+            st.session_state.form_key += 1
+            st.rerun()
         else:
             st.error(f"Error: {response.json()}")
 

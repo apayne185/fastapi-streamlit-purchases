@@ -1,11 +1,12 @@
 fastapi
-uvicorn
-pandas
+uvicorn[standard]
 python-multipart
 pydantic
-scikit-learn  
 numpy
 statsmodels
 httpx
 pytest
-
+sqlalchemy
+psycopg2-binary
+prometheus-fastapi-instrumentator
+slowapi

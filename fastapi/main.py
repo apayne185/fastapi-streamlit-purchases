@@ -1,129 +1,180 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from contextlib import asynccontextmanager
+from collections import defaultdict
 from datetime import date, datetime, timedelta
-from typing import Optional, List
 from statistics import mean
+from typing import Optional, List
 import io
 import csv
-from collections import defaultdict, Counter
-import numpy as np
-from statsmodels.tsa.holtwinters import ExponentialSmoothing 
+import json
+import logging
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from prometheus_fastapi_instrumentator import Instrumentator
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+
+from database import engine, get_db, Base
+from models import PurchaseRecord
 
 
+# --- Structured JSON logger ---
+class _JSONFormatter(logging.Formatter):
+    def format(self, record):
+        return json.dumps({
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "module": record.module,
+        })
 
-app = FastAPI(title="Customer Purchases API")
+_handler = logging.StreamHandler()
+_handler.setFormatter(_JSONFormatter())
+logger = logging.getLogger("purchases_api")
+logger.addHandler(_handler)
+logger.setLevel(logging.INFO)
 
-# In-memory storage, it will reset
-purchases = []
+
+# --- Rate limiter ---
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
 
+# --- App lifespan (creates tables on startup) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database tables ready")
+    yield
+
+
+app = FastAPI(title="Customer Purchases API", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+Instrumentator().instrument(app).expose(app)
+
+
+# --- Pydantic schema ---
 class Purchase(BaseModel):
     customer_name: str
     country: str
     purchase_date: date
     amount: float
- 
-#adds a single purchase to in-memory list 
+
+    model_config = {"from_attributes": True}
+
+
+# --- Health / readiness probes ---
+@app.get("/healthz", tags=["ops"])
+def health_check():
+    return {"status": "healthy"}
+
+
+@app.get("/readyz", tags=["ops"])
+def readiness_check(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ready"}
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database not ready")
+
+
+# --- Purchase endpoints ---
 @app.post("/purchase/", response_model=Purchase)
-async def add_purchase(purchase: Purchase):
-    purchases.append(purchase)
-    return purchase
+def add_purchase(purchase: Purchase, db: Session = Depends(get_db)):
+    record = PurchaseRecord(**purchase.model_dump())
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    logger.info(f"Purchase added: customer={purchase.customer_name} amount={purchase.amount}")
+    return record
 
 
-#adds bulk purchase data from the CSV file
 @app.post("/purchase/bulk/")
-async def add_bulk_purchases(file: UploadFile = File(...)):
+async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends(get_db)):
     if file.content_type not in ["text/csv"]:
         raise HTTPException(status_code=400, detail="Invalid file format")
-    contents = await file.read()            #reads file contents
-    decoded = contents.decode("utf-8")           #bytes to string
-    reader = csv.DictReader(io.StringIO(decoded))      #read as csv file
 
-    new_purchases = []
+    contents = await file.read()
+    reader = csv.DictReader(io.StringIO(contents.decode("utf-8")))
+
+    new_records = []
     for row in reader:
-        print(row)
         try:
-            purchase = Purchase(
+            record = PurchaseRecord(
                 customer_name=row["customer_name"].strip(),
                 country=row["country"].strip(),
-                # purchase_date=datetime.strptime(row["purchase_date"].strip(), "%d/%m/%Y").date(),
                 purchase_date=datetime.strptime(row["purchase_date"].strip(), "%Y-%m-%d").date(),
-                amount=float(row["amount"].strip())
+                amount=float(row["amount"].strip()),
             )
-            purchases.append(purchase)      #add to global list
-            new_purchases.append(purchase)     #add to batch success list 
+            db.add(record)
+            new_records.append(record)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Error processing row: {row} - {e}")
-    return JSONResponse(content={"added": len(new_purchases)})     
+            db.rollback()
+            raise HTTPException(status_code=400, detail=f"Error processing row: {row} — {e}")
+
+    db.commit()
+    logger.info(f"Bulk upload: {len(new_records)} purchases added")
+    return JSONResponse(content={"added": len(new_records)})
 
 
-
-#retrieves purchases with any optional filters 
 @app.get("/purchases/", response_model=List[Purchase])
-def get_purchases(country: Optional[str] = None, start_date: Optional[date] = None, end_date: Optional[date] = None):
-    filtered = purchases
+@limiter.limit("100/minute")
+def get_purchases(
+    request: Request,
+    country: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(PurchaseRecord)
     if country:
-        filtered = [p for p in filtered if p.country.lower() == country.lower()]
+        query = query.filter(PurchaseRecord.country.ilike(country))
     if start_date:
-        filtered = [p for p in filtered if p.purchase_date >= start_date]
+        query = query.filter(PurchaseRecord.purchase_date >= start_date)
     if end_date:
-        filtered = [p for p in filtered if p.purchase_date <= end_date]
-
-    sorted_purchases = sorted(filtered, key=lambda p: p.purchase_date, reverse=True)
-    return sorted_purchases
+        query = query.filter(PurchaseRecord.purchase_date <= end_date)
+    return query.order_by(PurchaseRecord.purchase_date.desc()).all()
 
 
-#calculates the KPIs and optinally provies sales forecast 
 @app.get("/purchases/kpis")
-def get_kpis(forecast_days: Optional[int] = None):
-    if not purchases:
+@limiter.limit("30/minute")
+def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session = Depends(get_db)):
+    records = db.query(PurchaseRecord).all()
+    if not records:
         raise HTTPException(status_code=404, detail="No purchase data")
-    
-    client_total = defaultdict(list)
-    for p in purchases:
+
+    client_total: dict = defaultdict(list)
+    clients_per_country: dict = defaultdict(set)
+    for p in records:
         client_total[p.customer_name].append(p.amount)
-
-    avg_purchase_per_client = {
-        client: mean(amounts) for client, amounts in client_total.items()
-    }
-
-    clients_per_country = defaultdict(set)
-    for p in purchases: 
         clients_per_country[p.country].add(p.customer_name)
-    
-    clients_per_country = {
-        country: len(clients) for country, clients in clients_per_country.items()
-    }
 
+    avg_per_client = {c: mean(amounts) for c, amounts in client_total.items()}
+    country_counts = {c: len(clients) for c, clients in clients_per_country.items()}
 
-    # if requested, forecast 
-    if forecast_days: 
+    sales_forecast = None
+    if forecast_days:
         today = date.today()
-        date_range =[today -timedelta(days=i) for i in range(30)]      #up to 30 days worth of data
-        daily_sales = [sum(p.amount for p in purchases if p.purchase_date == d) for d in date_range]     #sum of sales per day
-        print(daily_sales)    #debugging sorry
-
-        if len(daily_sales) < 2:        #makes sure theres enough data to forecast
+        date_range = [today - timedelta(days=i) for i in range(30)]
+        daily_sales = [
+            sum(p.amount for p in records if p.purchase_date == d)
+            for d in date_range
+        ]
+        if sum(1 for s in daily_sales if s > 0) < 2:
             raise HTTPException(status_code=400, detail="Need more data for forecasting")
-        
-        #trains exponential smoothing model on the data 
-        model = ExponentialSmoothing(daily_sales[::1], trend="add", seasonal=None)
-        model_fit = model.fit()
 
-        #forecast sales for number of days 
-        predicted_sales = model_fit.forecast(forecast_days)
-        print("Predicted Sales:", predicted_sales) 
-        sales_forecast = {f"Day {i+1}": round(predicted_sales[i], 2) for i in range(forecast_days)}
-
-
-
-
+        model = ExponentialSmoothing(daily_sales, trend="add", seasonal=None)
+        predicted = model.fit().forecast(forecast_days)
+        sales_forecast = {f"Day {i + 1}": round(predicted[i], 2) for i in range(forecast_days)}
 
     return {
-        "mean_purchases_per_client": avg_purchase_per_client,
-        "clients_per_country": clients_per_country,
-        "sales_forecast": sales_forecast if forecast_days else "Not requested"
+        "mean_purchases_per_client": avg_per_client,
+        "clients_per_country": country_counts,
+        "sales_forecast": sales_forecast if forecast_days else "Not requested",
     }
-
-
