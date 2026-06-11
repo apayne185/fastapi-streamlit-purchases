@@ -10,3 +10,4 @@ sqlalchemy
 psycopg2-binary
 prometheus-fastapi-instrumentator
 slowapi
+alembic

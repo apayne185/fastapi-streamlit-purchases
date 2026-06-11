@@ -19,7 +19,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
-from database import engine, get_db, Base
+from database import get_db
 from models import PurchaseRecord
 
 
@@ -44,19 +44,10 @@ logger.setLevel(logging.INFO)
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
 
-# --- App lifespan (creates tables on startup) ---
+# --- App lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    # Non-destructive migration: add currency column if upgrading from older schema
-    with engine.begin() as conn:
-        try:
-            conn.execute(text(
-                "ALTER TABLE purchases ADD COLUMN IF NOT EXISTS currency VARCHAR(3) DEFAULT 'USD'"
-            ))
-        except Exception:
-            pass
-    logger.info("Database tables ready")
+    logger.info("Application startup — schema managed by Alembic")
     yield
 
 
