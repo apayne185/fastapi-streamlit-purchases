@@ -1,4 +1,18 @@
-ENV ?= dev
+ENV   ?= dev
+# Set LOCAL=false when deploying to a real cluster that can pull from ghcr.io
+LOCAL ?= true
+
+# Auto-detect GitHub username from the git remote (works for any fork/clone)
+GITHUB_USER ?= $(shell git remote get-url origin 2>/dev/null | sed -E 's|.*github\.com[:/]([^/]+)/.*|\1|')
+IMAGE_FASTAPI   := ghcr.io/$(GITHUB_USER)/purchases-fastapi
+IMAGE_STREAMLIT := ghcr.io/$(GITHUB_USER)/purchases-streamlit
+
+# When LOCAL=true, override imagePullPolicy to Never so Minikube uses local images
+ifeq ($(LOCAL),true)
+PULL_POLICY_FLAGS := --set fastapi.imagePullPolicy=Never --set streamlit.imagePullPolicy=Never
+else
+PULL_POLICY_FLAGS :=
+endif
 
 .PHONY: setup start build deploy dev uat prod hosts status logs clean all
 
@@ -31,8 +45,8 @@ start:
 ## ── Docker images ─────────────────────────────────────────────────────────────
 build:
 	eval $$(minikube docker-env) && \
-	docker build ./fastapi -t ghcr.io/apayne185/purchases-fastapi:latest && \
-	docker build ./streamlit -t ghcr.io/apayne185/purchases-streamlit:latest
+	docker build ./fastapi -t $(IMAGE_FASTAPI):latest && \
+	docker build ./streamlit -t $(IMAGE_STREAMLIT):latest
 	@echo "→ Images built into Minikube"
 
 ## ── Helm deploy (default ENV=dev) ────────────────────────────────────────────
@@ -40,9 +54,11 @@ deploy:
 	helm upgrade --install purchases-$(ENV) ./helm \
 		-f helm/values.yaml \
 		-f helm/values-$(ENV).yaml \
-		--create-namespace \
-		--wait
-	@echo "→ Deployed to ENV=$(ENV)"
+		--set fastapi.image=$(IMAGE_FASTAPI) \
+		--set streamlit.image=$(IMAGE_STREAMLIT) \
+		$(PULL_POLICY_FLAGS) \
+		--create-namespace
+	@echo "→ Deployed to ENV=$(ENV) — run 'make status ENV=$(ENV)' to monitor pods"
 
 dev:
 	$(MAKE) deploy ENV=dev

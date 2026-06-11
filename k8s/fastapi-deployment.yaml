@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: fastapi
-          image: ghcr.io/apayne185/purchases-fastapi:latest
+          image: ghcr.io/YOUR_GITHUB_USERNAME/purchases-fastapi:latest  # replaced by `make deploy`
           imagePullPolicy: Never
           ports:
             - containerPort: 8000

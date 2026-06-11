@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
         - name: streamlit
-          image: ghcr.io/apayne185/purchases-streamlit:latest
+          image: ghcr.io/YOUR_GITHUB_USERNAME/purchases-streamlit:latest  # replaced by `make deploy`
           imagePullPolicy: Never
           ports:
             - containerPort: 8501

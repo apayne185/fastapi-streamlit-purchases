@@ -31,5 +31,5 @@ postgres:
   storage: 10Gi
 
 ingress:
-  uiHost: purchases.local
-  apiHost: api.purchases.local
+  uiHost: prod.purchases.local
+  apiHost: prod.api.purchases.local
