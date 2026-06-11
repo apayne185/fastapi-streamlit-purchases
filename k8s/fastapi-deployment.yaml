@@ -20,6 +20,7 @@ spec:
       containers:
         - name: fastapi
           image: ghcr.io/apayne185/purchases-fastapi:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 8000
           env:

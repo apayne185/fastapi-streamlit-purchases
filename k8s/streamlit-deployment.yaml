@@ -16,6 +16,7 @@ spec:
       containers:
         - name: streamlit
           image: ghcr.io/apayne185/purchases-streamlit:latest
+          imagePullPolicy: Never
           ports:
             - containerPort: 8501
           env:
