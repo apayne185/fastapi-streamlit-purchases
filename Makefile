@@ -24,8 +24,33 @@ all: start build deploy hosts
 	@echo "  API docs  : http://api.purchases.local/docs"
 	@echo "  Metrics   : http://api.purchases.local/metrics"
 
+## ── Prerequisite check ───────────────────────────────────────────────────────
+doctor:
+	@echo "Checking prerequisites...\n"
+	@command -v docker    >/dev/null 2>&1 \
+		&& echo "  [ok] docker    $$(docker --version | cut -d' ' -f3 | tr -d ',')" \
+		|| echo "  [missing] docker    — install from https://docs.docker.com/get-docker/"
+	@command -v minikube  >/dev/null 2>&1 \
+		&& echo "  [ok] minikube  $$(minikube version --short 2>/dev/null)" \
+		|| echo "  [missing] minikube  — run: make setup"
+	@command -v kubectl   >/dev/null 2>&1 \
+		&& echo "  [ok] kubectl   $$(kubectl version --client -o json 2>/dev/null | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"clientVersion\"][\"gitVersion\"])' 2>/dev/null || echo '(version unavailable)')" \
+		|| echo "  [missing] kubectl   — run: make setup"
+	@command -v helm      >/dev/null 2>&1 \
+		&& echo "  [ok] helm      $$(helm version --short 2>/dev/null)" \
+		|| echo "  [missing] helm      — run: make setup"
+	@command -v git       >/dev/null 2>&1 \
+		&& echo "  [ok] git       $$(git --version | cut -d' ' -f3)" \
+		|| echo "  [missing] git       — install git"
+	@echo ""
+	@command -v minikube >/dev/null 2>&1 && minikube status >/dev/null 2>&1 \
+		&& echo "  [ok] minikube cluster is running" \
+		|| echo "  [info] minikube cluster is not running — run: make start"
+
 ## ── Tool installation (run once) ─────────────────────────────────────────────
 setup:
+	@echo "→ Installing pre-commit hooks..."
+	pip install pre-commit && pre-commit install
 	@echo "→ Installing kubectl..."
 	curl -LO "https://dl.k8s.io/release/$$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
 	sudo install kubectl /usr/local/bin/kubectl && rm kubectl
