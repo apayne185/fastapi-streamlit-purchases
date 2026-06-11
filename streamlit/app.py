@@ -2,6 +2,7 @@ import os
 import streamlit as st
 import requests
 import pandas as pd
+import plotly.express as px
 
 CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "SEK", "NOK", "DKK"]
 
@@ -201,27 +202,55 @@ elif tab == "Analyze Purchases":
             df.groupby("country")["amount_display"]
             .sum()
             .sort_values(ascending=False)
-            .rename(f"Revenue ({display_currency})")
+            .reset_index()
+            .rename(columns={"country": "Country", "amount_display": f"Revenue ({display_currency})"})
         )
-        st.bar_chart(country_revenue)
+        fig = px.bar(
+            country_revenue,
+            x="Country",
+            y=f"Revenue ({display_currency})",
+            color="Country",
+            color_discrete_sequence=px.colors.qualitative.Safe,
+        )
+        fig.update_layout(showlegend=False, xaxis_title=None)
+        st.plotly_chart(fig, use_container_width=True)
 
     with chart_col2:
         st.subheader(f"Revenue Over Time ({display_currency})")
         daily_revenue = (
             df.groupby("purchase_date")["amount_display"]
             .sum()
-            .rename(f"Revenue ({display_currency})")
+            .reset_index()
+            .rename(columns={"purchase_date": "Date", "amount_display": f"Revenue ({display_currency})"})
         )
-        st.line_chart(daily_revenue)
+        fig = px.area(
+            daily_revenue,
+            x="Date",
+            y=f"Revenue ({display_currency})",
+            color_discrete_sequence=["#2563eb"],
+        )
+        fig.update_layout(xaxis_title=None)
+        st.plotly_chart(fig, use_container_width=True)
 
     st.subheader(f"Top 10 Customers ({display_currency})")
     top_customers = (
         df.groupby("customer_name")["amount_display"]
         .sum()
         .nlargest(10)
-        .rename(f"Total Spend ({display_currency})")
+        .sort_values()
+        .reset_index()
+        .rename(columns={"customer_name": "Customer", "amount_display": f"Total Spend ({display_currency})"})
     )
-    st.bar_chart(top_customers)
+    fig = px.bar(
+        top_customers,
+        x=f"Total Spend ({display_currency})",
+        y="Customer",
+        orientation="h",
+        color=f"Total Spend ({display_currency})",
+        color_continuous_scale="Blues",
+    )
+    fig.update_layout(coloraxis_showscale=False, yaxis_title=None)
+    st.plotly_chart(fig, use_container_width=True)
 
     st.divider()
 
@@ -280,14 +309,31 @@ elif tab == "Analyze Purchases":
                     .sort_values("Clients", ascending=False)
                 )
                 st.dataframe(df_countries, use_container_width=True)
-                st.bar_chart(df_countries.set_index("Country"))
+                fig = px.bar(
+                    df_countries,
+                    x="Country",
+                    y="Clients",
+                    color="Clients",
+                    color_continuous_scale="Blues",
+                )
+                fig.update_layout(coloraxis_showscale=False, xaxis_title=None)
+                st.plotly_chart(fig, use_container_width=True)
 
         if kpi.get("sales_forecast") and kpi["sales_forecast"] != "Not requested":
             st.subheader(f"Sales Forecast — Next {forecast_days} Days")
             df_forecast = pd.DataFrame(
                 kpi["sales_forecast"].items(), columns=["Day", "Projected Revenue ($)"]
             )
-            st.line_chart(df_forecast.set_index("Day"))
+            fig = px.line(
+                df_forecast,
+                x="Day",
+                y="Projected Revenue ($)",
+                markers=True,
+                color_discrete_sequence=["#2563eb"],
+            )
+            fig.update_traces(line=dict(dash="dot", width=2))
+            fig.update_layout(xaxis_title=None)
+            st.plotly_chart(fig, use_container_width=True)
             st.dataframe(
                 df_forecast.style.format({"Projected Revenue ($)": "${:,.2f}"}),
                 use_container_width=True,
