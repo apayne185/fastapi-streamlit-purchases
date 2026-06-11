@@ -178,13 +178,16 @@ def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session 
 
     sales_forecast = None
     if forecast_days:
-        today = date.today()
-        date_range = [today - timedelta(days=i) for i in range(30)]
-        daily_sales = [
-            sum(p.amount for p in records if p.purchase_date == d)
-            for d in date_range
-        ]
-        if sum(1 for s in daily_sales if s > 0) < 2:
+        # Build a daily series from the actual date range of the data
+        all_dates = sorted({p.purchase_date for p in records})
+        if len(all_dates) < 2:
+            raise HTTPException(status_code=400, detail="Need at least 2 days of purchase data for forecasting")
+
+        min_date, max_date = all_dates[0], all_dates[-1]
+        date_range = [min_date + timedelta(days=i) for i in range((max_date - min_date).days + 1)]
+        daily_sales = [sum(p.amount for p in records if p.purchase_date == d) for d in date_range]
+
+        if len(daily_sales) < 2:
             raise HTTPException(status_code=400, detail="Need more data for forecasting")
 
         model = ExponentialSmoothing(daily_sales, trend="add", seasonal=None)

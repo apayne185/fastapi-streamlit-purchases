@@ -250,7 +250,10 @@ elif tab == "Analyze Purchases":
         with st.spinner("Computing..."):
             kpi_resp = api_get("/purchases/kpis", params={"forecast_days": forecast_days})
 
-        if kpi_resp.status_code != 200:
+        if kpi_resp.status_code == 400:
+            st.warning(kpi_resp.json().get("detail", "Could not compute KPIs."))
+            st.stop()
+        elif kpi_resp.status_code != 200:
             st.error(f"Failed to fetch KPIs: {kpi_resp.text}")
             st.stop()
 
