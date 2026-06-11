@@ -20,6 +20,7 @@ spec:
       containers:
         - name: fastapi
           image: {{ .Values.fastapi.image }}:{{ .Values.fastapi.tag }}
+          imagePullPolicy: {{ .Values.fastapi.imagePullPolicy }}
           ports:
             - containerPort: 8000
           env:

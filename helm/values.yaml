@@ -3,6 +3,7 @@ namespace: purchases
 fastapi:
   image: ghcr.io/apayne185/purchases-fastapi
   tag: latest
+  imagePullPolicy: IfNotPresent
   replicas: 2
   resources:
     requests:
@@ -20,6 +21,7 @@ fastapi:
 streamlit:
   image: ghcr.io/apayne185/purchases-streamlit
   tag: latest
+  imagePullPolicy: IfNotPresent
   replicas: 1
   resources:
     requests:

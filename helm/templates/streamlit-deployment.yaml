@@ -16,6 +16,7 @@ spec:
       containers:
         - name: streamlit
           image: {{ .Values.streamlit.image }}:{{ .Values.streamlit.tag }}
+          imagePullPolicy: {{ .Values.streamlit.imagePullPolicy }}
           ports:
             - containerPort: 8501
           env:

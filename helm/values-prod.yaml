@@ -1,0 +1,35 @@
+namespace: purchases-prod
+
+fastapi:
+  imagePullPolicy: Always   # always pull from ghcr.io in production
+  replicas: 3
+  hpa:
+    minReplicas: 3
+    maxReplicas: 10
+    targetCPUUtilization: 70
+    targetMemoryUtilization: 80
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+streamlit:
+  imagePullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+postgres:
+  storage: 10Gi
+
+ingress:
+  uiHost: purchases.local
+  apiHost: api.purchases.local

@@ -1,0 +1,35 @@
+namespace: purchases-dev
+
+fastapi:
+  imagePullPolicy: Never   # use locally-built Minikube images
+  replicas: 1
+  hpa:
+    minReplicas: 1
+    maxReplicas: 3
+    targetCPUUtilization: 80
+    targetMemoryUtilization: 90
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+streamlit:
+  imagePullPolicy: Never
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+postgres:
+  storage: 512Mi
+
+ingress:
+  uiHost: dev.purchases.local
+  apiHost: dev.api.purchases.local
