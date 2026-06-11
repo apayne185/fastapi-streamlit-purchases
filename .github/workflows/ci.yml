@@ -45,8 +45,37 @@ jobs:
       - name: Lint Streamlit
         run: ruff check streamlit/
 
+  validate-manifests:
+    name: Validate Helm & K8s Manifests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint Helm chart (dev)
+        run: helm lint ./helm -f helm/values.yaml -f helm/values-dev.yaml
+
+      - name: Lint Helm chart (prod)
+        run: helm lint ./helm -f helm/values.yaml -f helm/values-prod.yaml
+
+      - name: Install kubeconform
+        run: |
+          curl -sL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar xz && sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate rendered K8s manifests (kubeconform)
+        run: |
+          helm template purchases ./helm \
+            -f helm/values.yaml \
+            -f helm/values-dev.yaml \
+            --set fastapi.image=ghcr.io/test/purchases-fastapi \
+            --set streamlit.image=ghcr.io/test/purchases-streamlit \
+          | kubeconform -strict -ignore-missing-schemas -summary
+
   docker-build:
-    name: Validate Docker Builds
+    name: Build & Scan Docker Images
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +91,7 @@ jobs:
           tags: purchases-fastapi:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          load: true
 
       - name: Build Streamlit image
         uses: docker/build-push-action@v5
@@ -71,3 +101,20 @@ jobs:
           tags: purchases-streamlit:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          load: true
+
+      - name: Scan FastAPI image (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: purchases-fastapi:test
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Scan Streamlit image (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: purchases-streamlit:test
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '0'

@@ -10,3 +10,4 @@ class PurchaseRecord(Base):
     country = Column(String, nullable=False, index=True)
     purchase_date = Column(Date, nullable=False, index=True)
     amount = Column(Float, nullable=False)
+    currency = Column(String(3), nullable=False, server_default="USD")
