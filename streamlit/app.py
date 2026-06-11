@@ -43,40 +43,47 @@ if tab == "Upload Purchases":
 
         if "form_key" not in st.session_state:
             st.session_state.form_key = 0
+        if "submit_attempted" not in st.session_state:
+            st.session_state.submit_attempted = False
 
-        customer_name = st.text_input("Customer Name", key=f"name_{st.session_state.form_key}")
-        country = st.text_input("Country", key=f"country_{st.session_state.form_key}")
+        _err = '<p style="color:#e53e3e;font-size:0.8em;margin-top:-12px;margin-bottom:8px">Required field</p>'
+
+        customer_name = st.text_input("Customer Name *", key=f"name_{st.session_state.form_key}")
+        if st.session_state.submit_attempted and not customer_name.strip():
+            st.markdown(_err, unsafe_allow_html=True)
+
+        country = st.text_input("Country *", key=f"country_{st.session_state.form_key}")
+        if st.session_state.submit_attempted and not country.strip():
+            st.markdown(_err, unsafe_allow_html=True)
+
         purchase_date = st.date_input("Purchase Date", key=f"date_{st.session_state.form_key}")
         amount = st.number_input("Amount ($)", min_value=0.01, format="%.2f", key=f"amount_{st.session_state.form_key}")
 
-        fields_valid = bool(customer_name.strip() and country.strip())
-        if not fields_valid:
-            st.caption("Customer name and country are required.")
-
-        submit = st.button(
-            "Submit Purchase",
-            use_container_width=True,
-            type="primary",
-            disabled=not fields_valid,
-        )
+        submit = st.button("Submit Purchase", use_container_width=True, type="primary")
 
         if submit:
-            with st.spinner("Saving..."):
-                response = api_post(
-                    "/purchase/",
-                    json={
-                        "customer_name": customer_name.strip(),
-                        "country": country.strip(),
-                        "purchase_date": str(purchase_date),
-                        "amount": amount,
-                    },
-                )
-            if response.status_code == 200:
-                st.success("Purchase saved successfully")
-                st.session_state.form_key += 1
+            if not customer_name.strip() or not country.strip():
+                st.session_state.submit_attempted = True
                 st.rerun()
             else:
-                st.error(f"Error: {response.json()}")
+                st.session_state.submit_attempted = False
+                with st.spinner("Saving..."):
+                    response = api_post(
+                        "/purchase/",
+                        json={
+                            "customer_name": customer_name.strip(),
+                            "country": country.strip(),
+                            "purchase_date": str(purchase_date),
+                            "amount": amount,
+                        },
+                    )
+                if response.status_code == 200:
+                    st.success("Purchase saved successfully")
+                    st.session_state.form_key += 1
+                    st.session_state.submit_attempted = False
+                    st.rerun()
+                else:
+                    st.error(f"Error: {response.json()}")
 
     with col_bulk:
         st.subheader("Bulk Upload (CSV)")
