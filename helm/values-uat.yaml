@@ -1,0 +1,35 @@
+namespace: purchases-uat
+
+fastapi:
+  imagePullPolicy: Never   # use locally-built Minikube images
+  replicas: 2
+  hpa:
+    minReplicas: 2
+    maxReplicas: 5
+    targetCPUUtilization: 75
+    targetMemoryUtilization: 85
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+streamlit:
+  imagePullPolicy: Never
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+postgres:
+  storage: 1Gi
+
+ingress:
+  uiHost: uat.purchases.local
+  apiHost: uat.api.purchases.local

@@ -2,7 +2,16 @@ name: CD
 
 on:
   push:
-    branches: [main]
+    branches: [main]      # auto-deploy to dev
+    tags: ["v*"]          # deploy to uat on version tags (e.g. v1.0.0)
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: dev
+        type: choice
+        options: [dev, uat, prod]
 
 jobs:
   build-and-push:
@@ -11,9 +20,20 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Derive image tag
+        id: meta
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.sha }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -31,8 +51,8 @@ jobs:
           context: ./fastapi
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/purchases-fastapi:${{ steps.meta.outputs.tag }}
             ghcr.io/${{ github.repository_owner }}/purchases-fastapi:latest
-            ghcr.io/${{ github.repository_owner }}/purchases-fastapi:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -42,7 +62,40 @@ jobs:
           context: ./streamlit
           push: true
           tags: |
+            ghcr.io/${{ github.repository_owner }}/purchases-streamlit:${{ steps.meta.outputs.tag }}
             ghcr.io/${{ github.repository_owner }}/purchases-streamlit:latest
-            ghcr.io/${{ github.repository_owner }}/purchases-streamlit:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ── Environment promotion summary ──────────────────────────────────────────
+  # Images are now in ghcr.io. Deployment to a real cluster would run:
+  #   helm upgrade --install purchases-<env> ./helm \
+  #     -f helm/values.yaml -f helm/values-<env>.yaml \
+  #     --set fastapi.image=ghcr.io/$OWNER/purchases-fastapi \
+  #     --set fastapi.tag=$IMAGE_TAG \
+  #     --set streamlit.image=ghcr.io/$OWNER/purchases-streamlit \
+  #     --set streamlit.tag=$IMAGE_TAG
+  #
+  # Promotion path:
+  #   push to main  → dev   (automatic)
+  #   git tag v*    → uat   (automatic on release tag)
+  #   workflow_dispatch prod → prod (manual approval gate)
+
+  notify:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    steps:
+      - name: Print promotion info
+        run: |
+          echo "Images pushed:"
+          echo "  ghcr.io/${{ github.repository_owner }}/purchases-fastapi:${{ needs.build-and-push.outputs.image_tag }}"
+          echo "  ghcr.io/${{ github.repository_owner }}/purchases-streamlit:${{ needs.build-and-push.outputs.image_tag }}"
+          echo ""
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "Promotion path: dev (auto on main merge)"
+          elif [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "Promotion path: uat (release tag ${{ github.ref_name }})"
+          else
+            echo "Promotion path: ${{ inputs.environment }} (manual)"
+          fi
