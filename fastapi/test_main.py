@@ -1,11 +1,14 @@
+import os
 import pytest
 from fastapi.testclient import TestClient
 from datetime import date
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+os.environ["RATELIMIT_ENABLED"] = "false"  # disable rate limiting in tests
+
 from database import Base, get_db
-from main import app, limiter
+from main import app
 
 # Use SQLite in-memory so tests need no running PostgreSQL
 SQLITE_URL = "sqlite:///./test_purchases.db"
@@ -22,7 +25,6 @@ def override_get_db():
 
 
 app.dependency_overrides[get_db] = override_get_db
-limiter._enabled = False  # disable rate limiting during tests
 
 client = TestClient(app)
 

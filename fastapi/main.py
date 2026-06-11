@@ -17,7 +17,6 @@ from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-import numpy as np
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 from database import engine, get_db, Base
