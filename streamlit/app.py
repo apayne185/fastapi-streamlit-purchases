@@ -6,7 +6,6 @@ import plotly.express as px
 
 CURRENCIES = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "SEK", "NOK", "DKK"]
 
-# Illustrative static rates vs USD (not live)
 RATES_TO_USD = {
     "USD": 1.00, "EUR": 1.08, "GBP": 1.27, "JPY": 0.0067,
     "CAD": 0.74, "AUD": 0.65, "CHF": 1.13, "SEK": 0.095,
@@ -23,18 +22,62 @@ API_URL = os.getenv("API_URL", "http://fastapi:8000")
 
 st.set_page_config(page_title="Customer Purchases", page_icon="assets/icon.png" if os.path.exists("assets/icon.png") else None, layout="wide")
 
-# ── Sidebar ────────────────────────────────────────────────────────────────────
-st.sidebar.title("Customer Purchases")
-st.sidebar.caption("Purchase analytics and management platform")
-st.sidebar.divider()
-tab = st.sidebar.radio("Navigate", ["Upload Purchases", "Analyze Purchases"])
-st.sidebar.divider()
-st.sidebar.caption(f"API: `{API_URL}`")
+
+# --- Auth helpers ---
+
+def _auth_header() -> dict:
+    token = st.session_state.get("token")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def _do_login(username: str, password: str):
+    try:
+        resp = requests.post(
+            f"{API_URL}/token",
+            data={"username": username, "password": password},
+            timeout=10,
+        )
+    except requests.exceptions.ConnectionError:
+        st.sidebar.error("Cannot reach the API.")
+        return
+    if resp.status_code == 200:
+        st.session_state.token = resp.json()["access_token"]
+        st.session_state.username = username
+        st.rerun()
+    else:
+        st.sidebar.error("Invalid username or password.")
+
+
+def _do_register(username: str, password: str, confirm: str):
+    if not username.strip():
+        st.sidebar.error("Username is required.")
+        return
+    if len(password) < 8:
+        st.sidebar.error("Password must be at least 8 characters.")
+        return
+    if password != confirm:
+        st.sidebar.error("Passwords do not match.")
+        return
+    try:
+        resp = requests.post(
+            f"{API_URL}/register",
+            json={"username": username.strip(), "password": password},
+            timeout=10,
+        )
+    except requests.exceptions.ConnectionError:
+        st.sidebar.error("Cannot reach the API.")
+        return
+    if resp.status_code == 200:
+        _do_login(username.strip(), password)
+    elif resp.status_code == 409:
+        st.sidebar.error("Username already taken.")
+    else:
+        st.sidebar.error(resp.json().get("detail", "Registration failed."))
 
 
 def api_get(path, params=None):
     try:
-        return requests.get(f"{API_URL}{path}", params=params, timeout=10)
+        return requests.get(f"{API_URL}{path}", params=params, headers=_auth_header(), timeout=10)
     except requests.exceptions.ConnectionError:
         st.error("Cannot reach the API. Is the backend running?")
         st.stop()
@@ -42,15 +85,57 @@ def api_get(path, params=None):
 
 def api_post(path, **kwargs):
     try:
-        return requests.post(f"{API_URL}{path}", timeout=10, **kwargs)
+        headers = kwargs.pop("headers", {})
+        headers.update(_auth_header())
+        return requests.post(f"{API_URL}{path}", timeout=10, headers=headers, **kwargs)
     except requests.exceptions.ConnectionError:
         st.error("Cannot reach the API. Is the backend running?")
         st.stop()
 
 
+# ── Sidebar ────────────────────────────────────────────────────────────────────
+st.sidebar.title("Customer Purchases")
+st.sidebar.caption("Purchase analytics and management platform")
+st.sidebar.divider()
+
+if st.session_state.get("token"):
+    st.sidebar.success(f"Signed in as **{st.session_state.username}**")
+    if st.sidebar.button("Sign out"):
+        st.session_state.pop("token", None)
+        st.session_state.pop("username", None)
+        st.rerun()
+else:
+    auth_mode = st.sidebar.radio("Auth mode", ["Sign in", "Create account"], horizontal=True, label_visibility="collapsed")
+
+    if auth_mode == "Sign in":
+        with st.sidebar.form("login_form"):
+            st.subheader("Sign in")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            if st.form_submit_button("Login", use_container_width=True):
+                _do_login(username, password)
+    else:
+        with st.sidebar.form("register_form"):
+            st.subheader("Create account")
+            new_username = st.text_input("Username")
+            new_password = st.text_input("Password", type="password")
+            confirm_password = st.text_input("Confirm password", type="password")
+            if st.form_submit_button("Register", use_container_width=True):
+                _do_register(new_username, new_password, confirm_password)
+
+st.sidebar.divider()
+tab = st.sidebar.radio("Navigate", ["Upload Purchases", "Analyze Purchases"])
+st.sidebar.divider()
+st.sidebar.caption(f"API: `{API_URL}`")
+
+
 # ── Tab 1: Upload ──────────────────────────────────────────────────────────────
 if tab == "Upload Purchases":
     st.title("Upload Purchases")
+
+    if not st.session_state.get("token"):
+        st.warning("Please sign in using the sidebar to upload purchases.")
+        st.stop()
 
     col_single, col_bulk = st.columns(2, gap="large")
 
@@ -103,6 +188,8 @@ if tab == "Upload Purchases":
                     st.session_state.form_key += 1
                     st.session_state.submit_attempted = False
                     st.rerun()
+                elif response.status_code == 401:
+                    st.error("Session expired — please sign in again.")
                 else:
                     st.error(f"Error: {response.json()}")
 
@@ -124,6 +211,8 @@ if tab == "Upload Purchases":
                     )
                 if response.status_code == 200:
                     st.success(f"Successfully uploaded {response.json()['added']} purchases")
+                elif response.status_code == 401:
+                    st.error("Session expired — please sign in again.")
                 else:
                     st.error(f"Upload failed: {response.text}")
 
@@ -132,14 +221,12 @@ if tab == "Upload Purchases":
 elif tab == "Analyze Purchases":
     st.title("Analyze Purchases")
 
-    # Display currency
     display_currency = st.selectbox(
         "Display currency",
         CURRENCIES,
         help="All amounts are converted to this currency for display. Rates are illustrative, not live.",
     )
 
-    # Filters + pagination
     with st.expander("Filters", expanded=True):
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -162,7 +249,6 @@ elif tab == "Analyze Purchases":
     if end_date:
         params["end_date"] = str(end_date)
 
-    # Reset to page 0 when filters change
     filter_key = (country_filter, str(start_date), str(end_date), page_size)
     if st.session_state.get("_last_filter") != filter_key:
         st.session_state.page_offset = 0
@@ -187,14 +273,12 @@ elif tab == "Analyze Purchases":
     if "currency" not in df.columns:
         df["currency"] = "USD"
 
-    # Convert all amounts to the selected display currency via USD as base
     df["amount_display"] = df.apply(
         lambda r: convert(to_usd(r["amount"], r["currency"]), display_currency), axis=1
     )
 
     sym = display_currency
 
-    # ── Summary metrics ────────────────────────────────────────────────────────
     current_page = st.session_state.page_offset // page_size + 1
     st.caption(
         f"Showing {st.session_state.page_offset + 1}–{st.session_state.page_offset + len(df):,} "
@@ -206,7 +290,6 @@ elif tab == "Analyze Purchases":
     m3.metric("Avg Order Value", f"{sym} {df['amount_display'].mean():,.2f}")
     m4.metric("Unique Customers", f"{df['customer_name'].nunique():,}")
 
-    # ── Pagination controls ────────────────────────────────────────────────────
     prev_col, _, next_col = st.columns([1, 8, 1])
     with prev_col:
         if st.button("← Prev", disabled=st.session_state.page_offset == 0):
@@ -219,7 +302,6 @@ elif tab == "Analyze Purchases":
 
     st.divider()
 
-    # ── Charts ─────────────────────────────────────────────────────────────────
     chart_col1, chart_col2 = st.columns(2)
 
     with chart_col1:
@@ -297,7 +379,6 @@ elif tab == "Analyze Purchases":
             mime="text/csv",
         )
 
-    # ── KPIs & Forecast ────────────────────────────────────────────────────────
     st.subheader("KPIs & Sales Forecast")
     forecast_days = st.number_input("Forecast horizon (days):", min_value=1, max_value=30, value=5)
 

@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 pydantic
+scikit-learn
 numpy
 statsmodels
 httpx
@@ -12,3 +13,5 @@ prometheus-fastapi-instrumentator
 slowapi
 alembic
 pytest-cov
+python-jose[cryptography]
+bcrypt

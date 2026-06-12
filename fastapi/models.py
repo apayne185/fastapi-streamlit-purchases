@@ -13,3 +13,13 @@ class PurchaseRecord(Base):
     currency = Column(String(3), nullable=False, server_default="USD")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+
+
+class UserRecord(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, nullable=False, index=True)
+    hashed_password = Column(String, nullable=False)
+    role = Column(String, nullable=False, server_default="user")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
