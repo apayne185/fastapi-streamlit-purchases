@@ -17,6 +17,17 @@ spec:
         prometheus.io/port: "8000"
         prometheus.io/path: "/metrics"
     spec:
+      initContainers:
+        - name: db-migrate
+          image: {{ .Values.fastapi.image }}:{{ .Values.fastapi.tag }}
+          imagePullPolicy: {{ .Values.fastapi.imagePullPolicy }}
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: purchases-config
+                  key: DATABASE_URL
       containers:
         - name: fastapi
           image: {{ .Values.fastapi.image }}:{{ .Values.fastapi.tag }}

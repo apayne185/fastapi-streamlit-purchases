@@ -10,6 +10,20 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_DB: purchases_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -24,7 +38,15 @@ jobs:
 
       - name: Run pytest
         working-directory: fastapi
-        run: pytest test_main.py -v --tb=short
+        run: pytest test_main.py -v --tb=short --cov=. --cov-report=term-missing --cov-fail-under=70
+
+      - name: Check for missing migrations (alembic check)
+        working-directory: fastapi
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/purchases_test
+        run: |
+          alembic upgrade head
+          alembic check
 
   lint:
     name: Lint

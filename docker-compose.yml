@@ -13,6 +13,15 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    build: ./fastapi
+    command: alembic upgrade head
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/purchases
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   fastapi:
     build: ./fastapi
     ports:
@@ -22,6 +31,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   streamlit:
     build: ./streamlit

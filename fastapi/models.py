@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Date
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, func
 from database import Base
 
 
@@ -11,3 +11,5 @@ class PurchaseRecord(Base):
     purchase_date = Column(Date, nullable=False, index=True)
     amount = Column(Float, nullable=False)
     currency = Column(String(3), nullable=False, server_default="USD")
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)

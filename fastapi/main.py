@@ -19,7 +19,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
-from database import engine, get_db, Base
+from database import get_db
 from models import PurchaseRecord
 
 
@@ -44,19 +44,10 @@ logger.setLevel(logging.INFO)
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
 
-# --- App lifespan (creates tables on startup) ---
+# --- App lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    # Non-destructive migration: add currency column if upgrading from older schema
-    with engine.begin() as conn:
-        try:
-            conn.execute(text(
-                "ALTER TABLE purchases ADD COLUMN IF NOT EXISTS currency VARCHAR(3) DEFAULT 'USD'"
-            ))
-        except Exception:
-            pass
-    logger.info("Database tables ready")
+    logger.info("Application startup — schema managed by Alembic")
     yield
 
 
@@ -71,11 +62,14 @@ SUPPORTED_CURRENCIES = {"USD","EUR","GBP","JPY","CAD","AUD","CHF","SEK","NOK","D
 
 # --- Pydantic schema ---
 class Purchase(BaseModel):
+    id: Optional[int] = None
     customer_name: str
     country: str
     purchase_date: date
     amount: float
     currency: str = "USD"
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -148,6 +142,8 @@ def get_purchases(
     country: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    limit: int = 500,
+    offset: int = 0,
     db: Session = Depends(get_db),
 ):
     query = db.query(PurchaseRecord)
@@ -157,7 +153,7 @@ def get_purchases(
         query = query.filter(PurchaseRecord.purchase_date >= start_date)
     if end_date:
         query = query.filter(PurchaseRecord.purchase_date <= end_date)
-    return query.order_by(PurchaseRecord.purchase_date.desc()).all()
+    return query.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset).all()
 
 
 @app.get("/purchases/kpis")
