@@ -13,6 +13,7 @@ class PurchaseRecord(Base):
     currency = Column(String(3), nullable=False, server_default="USD")
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
 
 
 class UserRecord(Base):

@@ -174,3 +174,28 @@ def test_bulk_upload_invalid_content_type(auth_headers):
     files = {"file": ("data.txt", b"not,csv,data", "text/plain")}
     response = client.post("/purchase/bulk/", files=files, headers=auth_headers)
     assert response.status_code == 400
+
+
+# --- Soft Delete ---
+
+def test_delete_purchase(auth_headers, sample_purchase):
+    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    purchase_id = add_resp.json()["id"]
+    del_resp = client.delete(f"/purchase/{purchase_id}", headers=auth_headers)
+    assert del_resp.status_code == 200
+    assert "deleted" in del_resp.json()["message"]
+    # Should no longer appear in GET
+    get_resp = client.get("/purchases/")
+    assert all(p["id"] != purchase_id for p in get_resp.json())
+
+
+def test_delete_purchase_unauthenticated(auth_headers, sample_purchase):
+    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    purchase_id = add_resp.json()["id"]
+    del_resp = client.delete(f"/purchase/{purchase_id}")
+    assert del_resp.status_code == 401
+
+
+def test_delete_purchase_not_found(auth_headers):
+    del_resp = client.delete("/purchase/99999", headers=auth_headers)
+    assert del_resp.status_code == 404

@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from statistics import mean
 from typing import Optional, List
 import io
@@ -186,7 +186,7 @@ def get_purchases(
     offset: int = 0,
     db: Session = Depends(get_db),
 ):
-    query = db.query(PurchaseRecord)
+    query = db.query(PurchaseRecord).filter(PurchaseRecord.deleted_at.is_(None))
     if country:
         query = query.filter(PurchaseRecord.country.ilike(country))
     if start_date:
@@ -196,10 +196,28 @@ def get_purchases(
     return query.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset).all()
 
 
+@app.delete("/purchase/{purchase_id}", tags=["purchases"])
+def delete_purchase(
+    purchase_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    record = db.query(PurchaseRecord).filter(
+        PurchaseRecord.id == purchase_id,
+        PurchaseRecord.deleted_at.is_(None),
+    ).first()
+    if not record:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    record.deleted_at = datetime.now(timezone.utc)
+    db.commit()
+    logger.info(f"Purchase {purchase_id} soft-deleted by {current_user.username}")
+    return {"message": f"Purchase {purchase_id} deleted"}
+
+
 @app.get("/purchases/kpis")
 @limiter.limit("30/minute")
 def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session = Depends(get_db)):
-    records = db.query(PurchaseRecord).all()
+    records = db.query(PurchaseRecord).filter(PurchaseRecord.deleted_at.is_(None)).all()
     if not records:
         raise HTTPException(status_code=404, detail="No purchase data")
 
