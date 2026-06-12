@@ -48,6 +48,33 @@ def _do_login(username: str, password: str):
         st.sidebar.error("Invalid username or password.")
 
 
+def _do_register(username: str, password: str, confirm: str):
+    if not username.strip():
+        st.sidebar.error("Username is required.")
+        return
+    if len(password) < 8:
+        st.sidebar.error("Password must be at least 8 characters.")
+        return
+    if password != confirm:
+        st.sidebar.error("Passwords do not match.")
+        return
+    try:
+        resp = requests.post(
+            f"{API_URL}/register",
+            json={"username": username.strip(), "password": password},
+            timeout=10,
+        )
+    except requests.exceptions.ConnectionError:
+        st.sidebar.error("Cannot reach the API.")
+        return
+    if resp.status_code == 200:
+        _do_login(username.strip(), password)
+    elif resp.status_code == 409:
+        st.sidebar.error("Username already taken.")
+    else:
+        st.sidebar.error(resp.json().get("detail", "Registration failed."))
+
+
 def api_get(path, params=None):
     try:
         return requests.get(f"{API_URL}{path}", params=params, headers=_auth_header(), timeout=10)
@@ -78,12 +105,23 @@ if st.session_state.get("token"):
         st.session_state.pop("username", None)
         st.rerun()
 else:
-    with st.sidebar.form("login_form"):
-        st.subheader("Sign in")
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        if st.form_submit_button("Login", use_container_width=True):
-            _do_login(username, password)
+    auth_mode = st.sidebar.radio("Auth mode", ["Sign in", "Create account"], horizontal=True, label_visibility="collapsed")
+
+    if auth_mode == "Sign in":
+        with st.sidebar.form("login_form"):
+            st.subheader("Sign in")
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            if st.form_submit_button("Login", use_container_width=True):
+                _do_login(username, password)
+    else:
+        with st.sidebar.form("register_form"):
+            st.subheader("Create account")
+            new_username = st.text_input("Username")
+            new_password = st.text_input("Password", type="password")
+            confirm_password = st.text_input("Confirm password", type="password")
+            if st.form_submit_button("Register", use_container_width=True):
+                _do_register(new_username, new_password, confirm_password)
 
 st.sidebar.divider()
 tab = st.sidebar.radio("Navigate", ["Upload Purchases", "Analyze Purchases"])

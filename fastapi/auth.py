@@ -7,21 +7,15 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from database import get_db
 
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-# Demo user store — in production this would be a database table
-_USERS = {
-    "admin": {
-        "username": "admin",
-        "hashed_password": bcrypt.hashpw(b"purchases123", bcrypt.gensalt()),
-        "role": "admin",
-    }
-}
 
 
 class Token(BaseModel):
@@ -34,11 +28,33 @@ class User(BaseModel):
     role: str
 
 
-def authenticate_user(username: str, password: str) -> Optional[User]:
-    user = _USERS.get(username)
-    if not user or not bcrypt.checkpw(password.encode(), user["hashed_password"]):
+def hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode(), bcrypt.gensalt()).decode()
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+def get_user(db: Session, username: str):
+    from models import UserRecord
+    return db.query(UserRecord).filter(UserRecord.username == username).first()
+
+
+def create_user(db: Session, username: str, password: str, role: str = "user"):
+    from models import UserRecord
+    record = UserRecord(username=username, hashed_password=hash_password(password), role=role)
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
+    record = get_user(db, username)
+    if not record or not verify_password(password, record.hashed_password):
         return None
-    return User(username=user["username"], role=user["role"])
+    return User(username=record.username, role=record.role)
 
 
 def create_access_token(username: str) -> str:
@@ -46,7 +62,10 @@ def create_access_token(username: str) -> str:
     return jwt.encode({"sub": username, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
 
 
-async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+) -> User:
     exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired token",
@@ -59,7 +78,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
             raise exc
     except JWTError:
         raise exc
-    user = _USERS.get(username)
-    if not user:
+    record = get_user(db, username)
+    if not record:
         raise exc
-    return User(username=user["username"], role=user["role"])
+    return User(username=record.username, role=record.role)

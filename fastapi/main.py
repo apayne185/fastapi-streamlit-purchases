@@ -20,9 +20,9 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
-from database import get_db
-from models import PurchaseRecord
-from auth import Token, User, authenticate_user, create_access_token, get_current_user
+from database import get_db, SessionLocal
+from models import PurchaseRecord, UserRecord
+from auth import Token, User, authenticate_user, create_access_token, get_current_user, get_user, create_user, hash_password
 
 
 # --- Structured JSON logger ---
@@ -49,7 +49,11 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 # --- App lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("Application startup — schema managed by Alembic")
+    # Seed a default admin account if no users exist yet
+    with SessionLocal() as db:
+        if not db.query(UserRecord).first():
+            create_user(db, "admin", "purchases123", role="admin")
+            logger.info("Seeded default admin user (admin / purchases123)")
     yield
 
 
@@ -93,12 +97,31 @@ def readiness_check(db: Session = Depends(get_db)):
 
 # --- Auth endpoints ---
 
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
 @app.post("/token", response_model=Token, tags=["auth"])
-async def login(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = authenticate_user(form_data.username, form_data.password)
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     return Token(access_token=create_access_token(user.username), token_type="bearer")
+
+
+@app.post("/register", response_model=User, tags=["auth"])
+def register(req: RegisterRequest, db: Session = Depends(get_db)):
+    if len(req.username.strip()) < 3:
+        raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
+    if len(req.password) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+    if get_user(db, req.username):
+        raise HTTPException(status_code=409, detail="Username already taken")
+    role = "admin" if db.query(UserRecord).count() == 0 else "user"
+    record = create_user(db, req.username.strip(), req.password, role=role)
+    logger.info(f"New user registered: {record.username} (role={record.role})")
+    return User(username=record.username, role=record.role)
 
 
 @app.get("/users/me", response_model=User, tags=["auth"])

@@ -5,12 +5,11 @@ from datetime import date
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-os.environ["RATELIMIT_ENABLED"] = "false"  # disable rate limiting in tests
+os.environ["RATELIMIT_ENABLED"] = "false"
 
 from database import Base, get_db
 from main import app
 
-# Use SQLite in-memory so tests need no running PostgreSQL
 SQLITE_URL = "sqlite:///./test_purchases.db"
 test_engine = create_engine(SQLITE_URL, connect_args={"check_same_thread": False})
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
@@ -37,6 +36,15 @@ def setup_db():
 
 
 @pytest.fixture
+def auth_headers():
+    """Register a test user and return a valid Bearer token header."""
+    client.post("/register", json={"username": "testuser", "password": "testpass123"})
+    resp = client.post("/token", data={"username": "testuser", "password": "testpass123"})
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
 def sample_purchase():
     return {
         "customer_name": "John Doe",
@@ -53,14 +61,61 @@ def sample_csv():
     return csv_data.encode("utf-8")
 
 
+# --- Health ---
+
 def test_health_check():
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json()["status"] == "healthy"
 
 
-def test_add_purchase(sample_purchase):
-    response = client.post("/purchase/", json=sample_purchase)
+# --- Auth ---
+
+def test_register_success():
+    resp = client.post("/register", json={"username": "newuser", "password": "securepass1"})
+    assert resp.status_code == 200
+    assert resp.json()["username"] == "newuser"
+
+
+def test_register_duplicate():
+    client.post("/register", json={"username": "dupeuser", "password": "securepass1"})
+    resp = client.post("/register", json={"username": "dupeuser", "password": "securepass1"})
+    assert resp.status_code == 409
+
+
+def test_register_short_password():
+    resp = client.post("/register", json={"username": "newuser", "password": "short"})
+    assert resp.status_code == 400
+
+
+def test_login_success():
+    client.post("/register", json={"username": "loginuser", "password": "testpass123"})
+    resp = client.post("/token", data={"username": "loginuser", "password": "testpass123"})
+    assert resp.status_code == 200
+    assert "access_token" in resp.json()
+
+
+def test_login_wrong_password():
+    client.post("/register", json={"username": "loginuser", "password": "testpass123"})
+    resp = client.post("/token", data={"username": "loginuser", "password": "wrongpass"})
+    assert resp.status_code == 401
+
+
+def test_users_me(auth_headers):
+    resp = client.get("/users/me", headers=auth_headers)
+    assert resp.status_code == 200
+    assert resp.json()["username"] == "testuser"
+
+
+def test_users_me_unauthenticated():
+    resp = client.get("/users/me")
+    assert resp.status_code == 401
+
+
+# --- Purchases ---
+
+def test_add_purchase(auth_headers, sample_purchase):
+    response = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["customer_name"] == sample_purchase["customer_name"]
@@ -68,23 +123,27 @@ def test_add_purchase(sample_purchase):
     assert data["amount"] == sample_purchase["amount"]
 
 
-def test_add_bulk_purchases(sample_csv):
+def test_add_purchase_unauthenticated(sample_purchase):
+    response = client.post("/purchase/", json=sample_purchase)
+    assert response.status_code == 401
+
+
+def test_add_bulk_purchases(auth_headers, sample_csv):
     files = {"file": ("purchases.csv", sample_csv, "text/csv")}
-    response = client.post("/purchase/bulk/", files=files)
+    response = client.post("/purchase/bulk/", files=files, headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["added"] == 2
 
 
-def test_get_purchases(sample_purchase):
-    client.post("/purchase/", json=sample_purchase)
+def test_get_purchases(auth_headers, sample_purchase):
+    client.post("/purchase/", json=sample_purchase, headers=auth_headers)
     response = client.get("/purchases/")
     assert response.status_code == 200
-    assert isinstance(response.json(), list)
     assert len(response.json()) == 1
 
 
-def test_get_purchases_with_filters(sample_csv):
-    client.post("/purchase/bulk/", files={"file": ("purchases.csv", sample_csv, "text/csv")})
+def test_get_purchases_with_filters(auth_headers, sample_csv):
+    client.post("/purchase/bulk/", files={"file": ("purchases.csv", sample_csv, "text/csv")}, headers=auth_headers)
     response = client.get("/purchases/?country=Canada&start_date=2024-12-02&end_date=2024-12-10")
     assert response.status_code == 200
     data = response.json()
@@ -92,8 +151,8 @@ def test_get_purchases_with_filters(sample_csv):
     assert all(p["country"].lower() == "canada" for p in data)
 
 
-def test_get_kpis(sample_purchase):
-    client.post("/purchase/", json=sample_purchase)
+def test_get_kpis(auth_headers, sample_purchase):
+    client.post("/purchase/", json=sample_purchase, headers=auth_headers)
     response = client.get("/purchases/kpis")
     assert response.status_code == 200
     assert "mean_purchases_per_client" in response.json()
@@ -111,7 +170,7 @@ def test_get_purchases_empty():
     assert response.json() == []
 
 
-def test_bulk_upload_invalid_content_type():
+def test_bulk_upload_invalid_content_type(auth_headers):
     files = {"file": ("data.txt", b"not,csv,data", "text/plain")}
-    response = client.post("/purchase/bulk/", files=files)
+    response = client.post("/purchase/bulk/", files=files, headers=auth_headers)
     assert response.status_code == 400
