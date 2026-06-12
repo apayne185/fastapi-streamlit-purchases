@@ -22,7 +22,7 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 from database import get_db, SessionLocal
 from models import PurchaseRecord, UserRecord
-from auth import Token, User, authenticate_user, create_access_token, get_current_user, get_user, create_user, hash_password
+from auth import Token, User, authenticate_user, create_access_token, get_current_user, get_user, create_user
 
 
 # --- Structured JSON logger ---
@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         if not db.query(UserRecord).first():
             create_user(db, "admin", "purchases123", role="admin")
-            logger.info("Seeded default admin user (admin / purchases123)")
+            logger.info("Seeded default admin user")
     yield
 
 
