@@ -62,11 +62,14 @@ SUPPORTED_CURRENCIES = {"USD","EUR","GBP","JPY","CAD","AUD","CHF","SEK","NOK","D
 
 # --- Pydantic schema ---
 class Purchase(BaseModel):
+    id: Optional[int] = None
     customer_name: str
     country: str
     purchase_date: date
     amount: float
     currency: str = "USD"
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
