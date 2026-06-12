@@ -10,6 +10,7 @@ import logging
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
+from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -21,6 +22,7 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 from database import get_db
 from models import PurchaseRecord
+from auth import Token, User, authenticate_user, create_access_token, get_current_user
 
 
 # --- Structured JSON logger ---
@@ -89,9 +91,24 @@ def readiness_check(db: Session = Depends(get_db)):
         raise HTTPException(status_code=503, detail="Database not ready")
 
 
+# --- Auth endpoints ---
+
+@app.post("/token", response_model=Token, tags=["auth"])
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    user = authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Incorrect username or password")
+    return Token(access_token=create_access_token(user.username), token_type="bearer")
+
+
+@app.get("/users/me", response_model=User, tags=["auth"])
+async def read_current_user(current_user: User = Depends(get_current_user)):
+    return current_user
+
+
 # --- Purchase endpoints ---
 @app.post("/purchase/", response_model=Purchase)
-def add_purchase(purchase: Purchase, db: Session = Depends(get_db)):
+def add_purchase(purchase: Purchase, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     currency = purchase.currency.upper()
     if currency not in SUPPORTED_CURRENCIES:
         raise HTTPException(status_code=400, detail=f"Unsupported currency: {currency}")
@@ -104,7 +121,7 @@ def add_purchase(purchase: Purchase, db: Session = Depends(get_db)):
 
 
 @app.post("/purchase/bulk/")
-async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends(get_db), _: User = Depends(get_current_user)):
     if file.content_type not in ["text/csv"]:
         raise HTTPException(status_code=400, detail="Invalid file format")
 
@@ -174,7 +191,6 @@ def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session 
 
     sales_forecast = None
     if forecast_days:
-        # Build a daily series from the actual date range of the data
         all_dates = sorted({p.purchase_date for p in records})
         if len(all_dates) < 2:
             raise HTTPException(status_code=400, detail="Need at least 2 days of purchase data for forecasting")
