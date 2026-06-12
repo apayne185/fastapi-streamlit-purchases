@@ -62,11 +62,14 @@ SUPPORTED_CURRENCIES = {"USD","EUR","GBP","JPY","CAD","AUD","CHF","SEK","NOK","D
 
 # --- Pydantic schema ---
 class Purchase(BaseModel):
+    id: Optional[int] = None
     customer_name: str
     country: str
     purchase_date: date
     amount: float
     currency: str = "USD"
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -139,6 +142,8 @@ def get_purchases(
     country: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    limit: int = 500,
+    offset: int = 0,
     db: Session = Depends(get_db),
 ):
     query = db.query(PurchaseRecord)
@@ -148,7 +153,7 @@ def get_purchases(
         query = query.filter(PurchaseRecord.purchase_date >= start_date)
     if end_date:
         query = query.filter(PurchaseRecord.purchase_date <= end_date)
-    return query.order_by(PurchaseRecord.purchase_date.desc()).all()
+    return query.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset).all()
 
 
 @app.get("/purchases/kpis")

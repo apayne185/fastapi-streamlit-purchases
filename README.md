@@ -1,24 +1,31 @@
 # Customer Purchases API & Dashboard
 
-A production-grade microservices app demonstrating Kubernetes orchestration, observability, CI/CD, and REST API design.
+A production-grade microservices app demonstrating Kubernetes orchestration, CI/CD, database migrations, observability, and REST API design.
+
+**Stack:** FastAPI · Streamlit · PostgreSQL · Alembic · Docker · Kubernetes · Helm · Prometheus · GitHub Actions
+
+---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Kubernetes Cluster                   │
-│                                                         │
-│  ┌──────────────┐    ┌──────────────┐    ┌───────────┐  │
-│  │  Streamlit   │───▶│   FastAPI    │───▶│ PostgreSQL│  │
-│  │  (dashboard) │    │  (REST API)  │    │    (DB)   │  │
-│  └──────────────┘    └──────────────┘    └───────────┘  │
-│          │                  │                            │
-│          └────── Ingress ───┘                            │
-│                  (nginx)                                 │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        Kubernetes Cluster                        │
+│                                                                  │
+│  ┌──────────────┐    ┌──────────────┐    ┌────────────────────┐  │
+│  │  Streamlit   │───▶│   FastAPI    │───▶│     PostgreSQL     │  │
+│  │  (Plotly     │    │  (REST API)  │    │  (Alembic schema)  │  │
+│  │  dashboard)  │    │              │    └────────────────────┘  │
+│  └──────────────┘    │  Prometheus  │                            │
+│          │           │  Rate limit  │    ┌────────────────────┐  │
+│          │           │  JSON logs   │───▶│  Init container    │  │
+│          └──── Ingress (nginx) ─────┘    │  alembic upgrade   │  │
+│                                          └────────────────────┘  │
+└──────────────────────────────────────────────────────────────────┘
+                              │
+                    GitHub Actions CI/CD
+              (lint · test · kubeconform · Trivy)
 ```
-
-**Stack:** FastAPI · Streamlit · PostgreSQL · Docker · Kubernetes · Helm · Prometheus · GitHub Actions
 
 ---
 
@@ -26,96 +33,180 @@ A production-grade microservices app demonstrating Kubernetes orchestration, obs
 
 | Feature | Details |
 |---|---|
-| REST API | Add single/bulk purchases, filter by country & date, KPIs, sales forecast |
-| PostgreSQL | Persistent storage with SQLAlchemy ORM and connection pooling |
+| REST API | Add single/bulk purchases, paginated list, filter by country & date, KPIs, sales forecast |
+| PostgreSQL | Persistent storage with SQLAlchemy ORM, connection pooling, audit columns |
+| Alembic | Versioned database migrations — `alembic upgrade head` applied by init container on every deploy |
 | Kubernetes | Deployments, Services, ConfigMap, Secret, PVC, Ingress, HPA |
 | Auto-scaling | HorizontalPodAutoscaler scales FastAPI 2→10 pods on CPU/memory pressure |
 | Health probes | `/healthz` (liveness) and `/readyz` (readiness, checks DB) wired into K8s |
 | Prometheus | `/metrics` endpoint with pod-level scraping annotations |
 | Structured logging | JSON-formatted logs with timestamp, level, and module |
-| Rate limiting | 100 req/min on GET /purchases, 30 req/min on KPIs |
-| Helm chart | Single `helm install` deploys the entire stack |
-| CI/CD | GitHub Actions — lint, test, Docker build on PR; push to ghcr.io on merge |
+| Rate limiting | 100 req/min on `GET /purchases/`, 30 req/min on KPIs |
+| Plotly charts | Interactive bar, area, and line charts with hover tooltips |
+| Helm chart | Single command deploys the full stack; separate values for dev/UAT/prod |
+| CI/CD | GitHub Actions — lint, test (with coverage), kubeconform, Trivy scan on PR; push to ghcr.io on merge |
+| Dependabot | Weekly dependency updates for pip, Docker base images, and GitHub Actions |
+| Pre-commit hooks | ruff lint + format enforced locally before every commit |
 
 ---
 
 ## Quick Start
 
-### Docker Compose (local dev)
+### Option A — Makefile (recommended)
+
+The Makefile automates every step. Run `make doctor` first to verify prerequisites.
 
 ```bash
-docker-compose up --build
+# Check tools are installed
+make doctor
+
+# Install missing tools (kubectl, minikube, helm) and pre-commit hooks
+make setup
+
+# Start Minikube cluster
+make start
+
+# Build Docker images into Minikube's registry
+make build
+
+# Deploy to dev environment
+make dev
+
+# Add /etc/hosts entries for local DNS
+make hosts
 ```
 
-- Streamlit: http://localhost:8501
-- FastAPI docs: http://localhost:8000/docs
-- Metrics: http://localhost:8000/metrics
+Access the app at http://dev.purchases.local after running `make hosts`.
+
+Other environment targets:
+```bash
+make uat    # deploy to purchases-uat namespace
+make prod   # deploy to purchases-prod namespace
+```
+
+Monitor and clean up:
+```bash
+make status ENV=dev     # pods, HPA, ingress
+make logs ENV=dev       # tail FastAPI logs
+make clean ENV=dev      # uninstall + delete namespace
+make clean-all          # remove all envs and stop Minikube
+```
 
 ---
 
-### Kubernetes with Minikube (free, local)
+### Option B — Docker Compose (local dev, no Kubernetes)
 
-#### 1. Install prerequisites
 ```bash
-# Minikube
-curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-linux-amd64
-sudo install minikube-linux-amd64 /usr/local/bin/minikube
-
-# kubectl
-curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-sudo install kubectl /usr/local/bin/kubectl
-
-# Helm
-curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+docker compose up --build
 ```
 
-#### 2. Start Minikube and enable addons
+The `migrate` service runs `alembic upgrade head` automatically before the API starts.
+
+| Service | URL |
+|---|---|
+| Streamlit dashboard | http://localhost:8501 |
+| FastAPI docs | http://localhost:8000/docs |
+| Prometheus metrics | http://localhost:8000/metrics |
+
+---
+
+### Option C — Kubernetes manual steps
+
 ```bash
+# 1. Start Minikube
 minikube start
 minikube addons enable ingress
-minikube addons enable metrics-server   # required for HPA
-```
+minikube addons enable metrics-server
 
-#### 3a. Deploy with kubectl
-```bash
-kubectl apply -f k8s/namespace.yaml
-kubectl apply -f k8s/
-```
+# 2. Build images into Minikube
+eval $(minikube docker-env)
+docker build ./fastapi -t ghcr.io/<your-github-username>/purchases-fastapi:latest
+docker build ./streamlit -t ghcr.io/<your-github-username>/purchases-streamlit:latest
 
-#### 3b. Deploy with Helm (recommended)
-```bash
-helm install purchases ./helm
-```
+# 3. Deploy with Helm
+helm upgrade --install purchases-dev ./helm \
+  -f helm/values.yaml -f helm/values-dev.yaml \
+  --set fastapi.image=ghcr.io/<your-github-username>/purchases-fastapi \
+  --set streamlit.image=ghcr.io/<your-github-username>/purchases-streamlit \
+  --set fastapi.imagePullPolicy=Never \
+  --set streamlit.imagePullPolicy=Never \
+  --create-namespace
 
-To override values (e.g. different image tag):
-```bash
-helm install purchases ./helm --set fastapi.tag=abc123
-```
-
-#### 4. Configure local DNS
-```bash
+# 4. Add DNS entries
 echo "$(minikube ip) purchases.local api.purchases.local" | sudo tee -a /etc/hosts
 ```
 
-#### 5. Access the app
-- Dashboard: http://purchases.local
-- API docs: http://api.purchases.local/docs
-- Metrics: http://api.purchases.local/metrics
+---
 
-#### 6. Watch auto-scaling in action
+## Database Migrations (Alembic)
+
+Schema changes are managed through versioned migrations in `fastapi/alembic/versions/`.
+
 ```bash
-# Watch pods
-kubectl get pods -n purchases -w
+# Apply all pending migrations
+cd fastapi && alembic upgrade head
 
-# Watch HPA
-kubectl get hpa -n purchases -w
+# Check for model/migration drift (run in CI)
+alembic check
+
+# Generate a migration after changing models.py
+alembic revision --autogenerate -m "add deleted_at column"
+
+# Roll back one migration
+alembic downgrade -1
+
+# View migration history
+alembic history --verbose
+```
+
+In Kubernetes, an **init container** runs `alembic upgrade head` before the FastAPI pod starts on every deploy, so schema and code are always in sync.
+
+---
+
+## Running Tests
+
+```bash
+cd fastapi
+pip install -r requirements.txt
+pytest test_main.py -v --cov=. --cov-report=term-missing
+```
+
+Tests use an in-memory SQLite database — no PostgreSQL required.
+
+---
+
+## API Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/purchase/` | Add a single purchase |
+| `POST` | `/purchase/bulk/` | Upload purchases from CSV |
+| `GET` | `/purchases/` | List purchases — filter by `country`, `start_date`, `end_date`; paginate with `limit` & `offset` |
+| `GET` | `/purchases/kpis` | KPIs + optional sales forecast (`?forecast_days=N`) |
+| `GET` | `/healthz` | Liveness probe |
+| `GET` | `/readyz` | Readiness probe (checks DB connection) |
+| `GET` | `/metrics` | Prometheus metrics |
+
+---
+
+## CI/CD Pipeline
+
+| Trigger | Jobs |
+|---|---|
+| Every push / PR to `main` | Lint (ruff), pytest + coverage, `alembic check`, Helm lint, kubeconform schema validation, Docker build + Trivy vulnerability scan |
+| Merge to `main` | Build + push images to `ghcr.io` with `latest` and commit-SHA tags |
+| Git tag `v*` | Push UAT-tagged images |
+| `workflow_dispatch` | Manual prod deploy |
+
+Images are published to:
+```
+ghcr.io/<your-github-username>/purchases-fastapi
+ghcr.io/<your-github-username>/purchases-streamlit
 ```
 
 ---
 
-### Observability — Prometheus & Grafana
-
-Install the kube-prometheus-stack (all free, runs in Minikube):
+## Observability — Prometheus & Grafana
 
 ```bash
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
@@ -127,48 +218,9 @@ helm install monitoring prometheus-community/kube-prometheus-stack \
 kubectl port-forward svc/monitoring-grafana 3000:80 -n monitoring
 ```
 
-Grafana is at http://localhost:3000 (user: `admin`, pass: `prom-operator`).
+Grafana: http://localhost:3000 (user: `admin`, pass: `prom-operator`).
 
-The FastAPI pods have Prometheus scraping annotations, so metrics appear automatically.
-
----
-
-## Running Tests
-
-```bash
-cd fastapi
-pip install -r requirements.txt
-pytest test_main.py -v
-```
-
-Tests use an in-memory SQLite database — no PostgreSQL needed.
-
----
-
-## API Endpoints
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/purchase/` | Add a single purchase |
-| POST | `/purchase/bulk/` | Upload purchases from CSV |
-| GET | `/purchases/` | List purchases (filter by country, date) |
-| GET | `/purchases/kpis` | KPIs + optional sales forecast |
-| GET | `/healthz` | Liveness probe |
-| GET | `/readyz` | Readiness probe (checks DB) |
-| GET | `/metrics` | Prometheus metrics |
-
----
-
-## CI/CD Pipeline
-
-| Trigger | Jobs |
-|---|---|
-| Pull request to `main` | Lint (ruff), pytest, Docker build validation |
-| Push to `main` | Build + push images to `ghcr.io` with `latest` and commit-SHA tags |
-
-Images are published to:
-- `ghcr.io/apayne185/purchases-fastapi`
-- `ghcr.io/apayne185/purchases-streamlit`
+FastAPI pods have Prometheus scraping annotations — metrics appear automatically.
 
 ---
 
@@ -177,36 +229,39 @@ Images are published to:
 ```
 .
 ├── fastapi/
-│   ├── main.py          # API endpoints, rate limiting, structured logging
-│   ├── database.py      # SQLAlchemy engine + session dependency
-│   ├── models.py        # ORM model (PurchaseRecord)
-│   ├── test_main.py     # pytest suite (SQLite in-memory)
+│   ├── main.py               # API endpoints, rate limiting, structured logging
+│   ├── database.py           # SQLAlchemy engine, session dependency, naming conventions
+│   ├── models.py             # ORM model (PurchaseRecord) with audit columns
+│   ├── alembic.ini           # Alembic config (DB URL read from environment)
+│   ├── alembic/
+│   │   ├── env.py            # Migration runner — imports Base.metadata for autogenerate
+│   │   ├── script.py.mako    # Template for generated migration files
+│   │   └── versions/
+│   │       └── 0001_create_purchases_table.py
+│   ├── test_main.py          # pytest suite (SQLite in-memory, no Postgres needed)
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── streamlit/
-│   ├── app.py
+│   ├── app.py                # Plotly charts, form validation, currency conversion
+│   ├── .streamlit/
+│   │   └── config.toml       # Custom theme
 │   ├── requirements.txt
 │   └── Dockerfile
-├── k8s/                 # Raw Kubernetes manifests
-│   ├── namespace.yaml
-│   ├── configmap.yaml
-│   ├── secret.yaml
-│   ├── postgres-pvc.yaml
-│   ├── postgres-deployment.yaml
-│   ├── postgres-service.yaml
-│   ├── fastapi-deployment.yaml
-│   ├── fastapi-service.yaml
-│   ├── fastapi-hpa.yaml
-│   ├── streamlit-deployment.yaml
-│   ├── streamlit-service.yaml
-│   └── ingress.yaml
-├── helm/                # Helm chart (parameterised K8s manifests)
+├── k8s/                      # Raw Kubernetes manifests
+├── helm/                     # Helm chart with dev/uat/prod values files
 │   ├── Chart.yaml
 │   ├── values.yaml
+│   ├── values-dev.yaml
+│   ├── values-uat.yaml
+│   ├── values-prod.yaml
 │   └── templates/
 ├── .github/
-│   └── workflows/
-│       ├── ci.yml       # PR: lint + test + build
-│       └── cd.yml       # main: push images to ghcr.io
-└── docker-compose.yml
+│   ├── workflows/
+│   │   ├── ci.yml            # PR: lint, test, kubeconform, Trivy
+│   │   └── cd.yml            # main: push images to ghcr.io
+│   └── dependabot.yml        # Weekly updates for pip, Docker, Actions
+├── .pre-commit-config.yaml   # ruff lint + format on commit
+├── pyproject.toml            # ruff config
+├── Makefile                  # doctor, setup, start, build, dev/uat/prod, clean
+└── docker-compose.yml        # Local dev: postgres + migrate + fastapi + streamlit
 ```
