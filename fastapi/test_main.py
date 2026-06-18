@@ -176,6 +176,33 @@ def test_bulk_upload_invalid_content_type(auth_headers):
     assert response.status_code == 400
 
 
+def test_add_purchase_negative_amount(auth_headers):
+    response = client.post("/purchase/", json={
+        "customer_name": "Test", "country": "US",
+        "purchase_date": str(date.today()), "amount": -10.0, "currency": "USD",
+    }, headers=auth_headers)
+    assert response.status_code == 422
+
+
+def test_add_purchase_zero_amount(auth_headers):
+    response = client.post("/purchase/", json={
+        "customer_name": "Test", "country": "US",
+        "purchase_date": str(date.today()), "amount": 0.0, "currency": "USD",
+    }, headers=auth_headers)
+    assert response.status_code == 422
+
+
+def test_get_purchases_limit_exceeded():
+    response = client.get("/purchases/?limit=9999")
+    assert response.status_code == 422
+
+
+def test_get_kpis_forecast_days_exceeded(auth_headers, sample_purchase):
+    client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    response = client.get("/purchases/kpis?forecast_days=999")
+    assert response.status_code == 422
+
+
 # --- Soft Delete ---
 
 def test_delete_purchase(auth_headers, sample_purchase):

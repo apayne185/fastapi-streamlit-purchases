@@ -263,7 +263,7 @@ def delete_purchase(
 
 @app.get("/purchases/kpis")
 @limiter.limit("30/minute")
-def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session = Depends(get_db)):
+def get_kpis(request: Request, forecast_days: Optional[int] = Query(default=None, ge=1, le=90), db: Session = Depends(get_db)):
     # Only cache the no-forecast variant — forecasts are parameterised and cheap to recompute
     cache = get_redis()
     if cache and not forecast_days:
