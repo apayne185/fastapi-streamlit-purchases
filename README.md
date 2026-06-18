@@ -2,7 +2,7 @@
 
 A production-grade microservices app demonstrating Kubernetes orchestration, CI/CD, database migrations, observability, and REST API design.
 
-**Stack:** FastAPI · Streamlit · PostgreSQL · Alembic · Docker · Kubernetes · Helm · Prometheus · GitHub Actions
+**Stack:** FastAPI · Streamlit · PostgreSQL · Alembic · Redis · Docker · Kubernetes · Helm · Prometheus · GitHub Actions
 
 ---
 
@@ -16,9 +16,13 @@ A production-grade microservices app demonstrating Kubernetes orchestration, CI/
 │  │  Streamlit   │───▶│   FastAPI    │───▶│     PostgreSQL     │  │
 │  │  (Plotly     │    │  (REST API)  │    │  (Alembic schema)  │  │
 │  │  dashboard)  │    │              │    └────────────────────┘  │
-│  └──────────────┘    │  Prometheus  │                            │
-│          │           │  Rate limit  │    ┌────────────────────┐  │
-│          │           │  JSON logs   │───▶│  Init container    │  │
+│  └──────────────┘    │  JWT auth    │                            │
+│          │           │  Prometheus  │    ┌────────────────────┐  │
+│          │           │  Rate limit  │───▶│       Redis        │  │
+│          │           │  JSON logs   │    │   (KPI cache)      │  │
+│          │           │              │    └────────────────────┘  │
+│          │           │              │    ┌────────────────────┐  │
+│          │           │              │───▶│  Init container    │  │
 │          └──── Ingress (nginx) ─────┘    │  alembic upgrade   │  │
 │                                          └────────────────────┘  │
 └──────────────────────────────────────────────────────────────────┘
@@ -33,9 +37,12 @@ A production-grade microservices app demonstrating Kubernetes orchestration, CI/
 
 | Feature | Details |
 |---|---|
-| REST API | Add single/bulk purchases, paginated list, filter by country & date, KPIs, sales forecast |
-| PostgreSQL | Persistent storage with SQLAlchemy ORM, connection pooling, audit columns |
-| Alembic | Versioned database migrations — `alembic upgrade head` applied by init container on every deploy |
+| REST API | Add single/bulk purchases, paginated list, filter by country & date, KPIs, sales forecast, soft delete |
+| JWT Auth | Registration, login, and role-based access (`admin`/`user`); write endpoints require a Bearer token |
+| Soft Deletes | `DELETE /purchase/{id}` sets `deleted_at`; all read queries filter deleted rows, never hard-deletes |
+| Redis Caching | KPI endpoint cached in Redis with 60s TTL; invalidated automatically on any write |
+| PostgreSQL | Persistent storage with SQLAlchemy ORM, connection pooling, audit columns (`created_at`, `updated_at`) |
+| Alembic | Versioned migrations (`0001`→`0004`) — applied by init container on every deploy |
 | Kubernetes | Deployments, Services, ConfigMap, Secret, PVC, Ingress, HPA |
 | Auto-scaling | HorizontalPodAutoscaler scales FastAPI 2→10 pods on CPU/memory pressure |
 | Health probes | `/healthz` (liveness) and `/readyz` (readiness, checks DB) wired into K8s |
@@ -177,15 +184,19 @@ Tests use an in-memory SQLite database — no PostgreSQL required.
 
 ## API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/purchase/` | Add a single purchase |
-| `POST` | `/purchase/bulk/` | Upload purchases from CSV |
-| `GET` | `/purchases/` | List purchases — filter by `country`, `start_date`, `end_date`; paginate with `limit` & `offset` |
-| `GET` | `/purchases/kpis` | KPIs + optional sales forecast (`?forecast_days=N`) |
-| `GET` | `/healthz` | Liveness probe |
-| `GET` | `/readyz` | Readiness probe (checks DB connection) |
-| `GET` | `/metrics` | Prometheus metrics |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/register` | — | Create a new user account |
+| `POST` | `/token` | — | Login — returns a JWT Bearer token |
+| `GET` | `/users/me` | Required | Returns the current authenticated user |
+| `POST` | `/purchase/` | Required | Add a single purchase |
+| `POST` | `/purchase/bulk/` | Required | Upload purchases from CSV |
+| `DELETE` | `/purchase/{id}` | Required | Soft-delete a purchase by ID |
+| `GET` | `/purchases/` | — | List purchases — filter by `country`, `start_date`, `end_date`; paginate with `limit` & `offset` |
+| `GET` | `/purchases/kpis` | — | KPIs + optional sales forecast (`?forecast_days=N`); cached in Redis for 60s |
+| `GET` | `/healthz` | — | Liveness probe |
+| `GET` | `/readyz` | — | Readiness probe (checks DB connection) |
+| `GET` | `/metrics` | — | Prometheus metrics |
 
 ---
 
@@ -229,25 +240,43 @@ FastAPI pods have Prometheus scraping annotations — metrics appear automatical
 ```
 .
 ├── fastapi/
-│   ├── main.py               # API endpoints, rate limiting, structured logging
+│   ├── main.py               # API endpoints, JWT auth, rate limiting, Redis cache, structured logging
+│   ├── auth.py               # JWT token creation/validation, password hashing, user dependency
 │   ├── database.py           # SQLAlchemy engine, session dependency, naming conventions
-│   ├── models.py             # ORM model (PurchaseRecord) with audit columns
+│   ├── models.py             # ORM models: PurchaseRecord (soft delete, audit cols), UserRecord
 │   ├── alembic.ini           # Alembic config (DB URL read from environment)
 │   ├── alembic/
 │   │   ├── env.py            # Migration runner — imports Base.metadata for autogenerate
 │   │   ├── script.py.mako    # Template for generated migration files
 │   │   └── versions/
-│   │       └── 0001_create_purchases_table.py
-│   ├── test_main.py          # pytest suite (SQLite in-memory, no Postgres needed)
+│   │       ├── 0001_create_purchases_table.py
+│   │       ├── 0002_add_audit_columns.py
+│   │       ├── 0003_add_users_table.py
+│   │       └── 0004_add_soft_delete.py
+│   ├── test_main.py          # pytest suite — 20 tests, 91% coverage (SQLite, no Postgres needed)
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── streamlit/
-│   ├── app.py                # Plotly charts, form validation, currency conversion
+│   ├── app.py                # Auth UI, Plotly charts, delete UI, pagination, currency conversion
 │   ├── .streamlit/
 │   │   └── config.toml       # Custom theme
 │   ├── requirements.txt
 │   └── Dockerfile
 ├── k8s/                      # Raw Kubernetes manifests
+│   ├── configmap.yaml
+│   ├── secret.yaml
+│   ├── namespace.yaml
+│   ├── postgres-deployment.yaml
+│   ├── postgres-service.yaml
+│   ├── postgres-pvc.yaml
+│   ├── redis-deployment.yaml
+│   ├── redis-service.yaml
+│   ├── fastapi-deployment.yaml
+│   ├── fastapi-service.yaml
+│   ├── fastapi-hpa.yaml
+│   ├── streamlit-deployment.yaml
+│   ├── streamlit-service.yaml
+│   └── ingress.yaml
 ├── helm/                     # Helm chart with dev/uat/prod values files
 │   ├── Chart.yaml
 │   ├── values.yaml
@@ -263,5 +292,5 @@ FastAPI pods have Prometheus scraping annotations — metrics appear automatical
 ├── .pre-commit-config.yaml   # ruff lint + format on commit
 ├── pyproject.toml            # ruff config
 ├── Makefile                  # doctor, setup, start, build, dev/uat/prod, clean
-└── docker-compose.yml        # Local dev: postgres + migrate + fastapi + streamlit
+└── docker-compose.yml        # Local dev: postgres + redis + migrate + fastapi + streamlit
 ```
