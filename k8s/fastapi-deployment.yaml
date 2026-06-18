@@ -39,6 +39,11 @@ spec:
                 secretKeyRef:
                   name: purchases-secret
                   key: SECRET_KEY
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: purchases-secret
+                  key: ADMIN_PASSWORD
           livenessProbe:
             httpGet:
               path: /healthz

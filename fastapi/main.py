@@ -9,10 +9,11 @@ import json
 import logging
 import os
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -69,15 +70,23 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 # --- App lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Seed a default admin account if no users exist yet
     with SessionLocal() as db:
         if not db.query(UserRecord).first():
-            create_user(db, "admin", "purchases123", role="admin")
+            admin_password = os.getenv("ADMIN_PASSWORD", "purchases123")
+            create_user(db, "admin", admin_password, role="admin")
             logger.info("Seeded default admin user")
     yield
 
 
 app = FastAPI(title="Customer Purchases API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -92,7 +101,7 @@ class Purchase(BaseModel):
     customer_name: str
     country: str
     purchase_date: date
-    amount: float
+    amount: float = Field(gt=0, description="Must be greater than zero")
     currency: str = "USD"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -214,8 +223,8 @@ def get_purchases(
     country: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    limit: int = 500,
-    offset: int = 0,
+    limit: int = Query(default=500, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     query = db.query(PurchaseRecord).filter(PurchaseRecord.deleted_at.is_(None))

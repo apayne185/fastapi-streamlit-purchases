@@ -4,6 +4,7 @@ fastapi:
   image: ghcr.io/YOUR_GITHUB_USERNAME/purchases-fastapi  # overridden by Makefile automatically
   tag: latest
   secretKey: change-me-in-production  # override per environment or via --set fastapi.secretKey=<value>
+  adminPassword: change-me-in-production  # password for the seeded admin account
   imagePullPolicy: IfNotPresent
   replicas: 2
   resources:

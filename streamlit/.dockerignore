@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+streamlit_venv/
+.venv/
+.pytest_cache/
