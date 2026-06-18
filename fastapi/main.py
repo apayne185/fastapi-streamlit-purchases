@@ -159,9 +159,12 @@ def add_purchase(purchase: Purchase, db: Session = Depends(get_db), _: User = De
     db.add(record)
     db.commit()
     db.refresh(record)
-    cache = get_redis()
-    if cache:
-        cache.delete(KPI_CACHE_KEY)
+    try:
+        cache = get_redis()
+        if cache:
+            cache.delete(KPI_CACHE_KEY)
+    except Exception:
+        pass
     logger.info(f"Purchase added: customer={purchase.customer_name} amount={purchase.amount} currency={currency}")
     return record
 
@@ -194,9 +197,12 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends
             raise HTTPException(status_code=400, detail=f"Error processing row: {row} — {e}")
 
     db.commit()
-    cache = get_redis()
-    if cache:
-        cache.delete(KPI_CACHE_KEY)
+    try:
+        cache = get_redis()
+        if cache:
+            cache.delete(KPI_CACHE_KEY)
+    except Exception:
+        pass
     logger.info(f"Bulk upload: {len(new_records)} purchases added")
     return JSONResponse(content={"added": len(new_records)})
 
@@ -236,9 +242,12 @@ def delete_purchase(
         raise HTTPException(status_code=404, detail="Purchase not found")
     record.deleted_at = datetime.now(timezone.utc)
     db.commit()
-    cache = get_redis()
-    if cache:
-        cache.delete(KPI_CACHE_KEY)
+    try:
+        cache = get_redis()
+        if cache:
+            cache.delete(KPI_CACHE_KEY)
+    except Exception:
+        pass
     logger.info(f"Purchase {purchase_id} soft-deleted by {current_user.username}")
     return {"message": f"Purchase {purchase_id} deleted"}
 
@@ -249,10 +258,13 @@ def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session 
     # Only cache the no-forecast variant — forecasts are parameterised and cheap to recompute
     cache = get_redis()
     if cache and not forecast_days:
-        cached = cache.get(KPI_CACHE_KEY)
-        if cached:
-            logger.info("KPI cache hit")
-            return json.loads(cached)
+        try:
+            cached = cache.get(KPI_CACHE_KEY)
+            if cached:
+                logger.info("KPI cache hit")
+                return json.loads(cached)
+        except Exception:
+            pass
 
     records = db.query(PurchaseRecord).filter(PurchaseRecord.deleted_at.is_(None)).all()
     if not records:
@@ -291,7 +303,10 @@ def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session 
     }
 
     if cache and not forecast_days:
-        cache.setex(KPI_CACHE_KEY, KPI_TTL, json.dumps(result))
-        logger.info("KPI cache set")
+        try:
+            cache.setex(KPI_CACHE_KEY, KPI_TTL, json.dumps(result))
+            logger.info("KPI cache set")
+        except Exception:
+            pass
 
     return result

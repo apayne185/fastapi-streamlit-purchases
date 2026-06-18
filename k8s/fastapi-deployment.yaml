@@ -34,6 +34,11 @@ spec:
                 configMapKeyRef:
                   name: purchases-config
                   key: REDIS_URL
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: purchases-secret
+                  key: SECRET_KEY
           livenessProbe:
             httpGet:
               path: /healthz
