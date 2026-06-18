@@ -363,7 +363,7 @@ elif tab == "Analyze Purchases":
     st.divider()
 
     with st.expander("Raw Data Table"):
-        display_df = df[["customer_name", "country", "purchase_date", "amount", "currency", "amount_display"]].copy()
+        display_df = df[["id", "customer_name", "country", "purchase_date", "amount", "currency", "amount_display"]].copy()
         display_df = display_df.rename(columns={"amount_display": f"amount ({display_currency})"})
         st.dataframe(
             display_df.style.format({
@@ -378,6 +378,39 @@ elif tab == "Analyze Purchases":
             file_name="purchases_export.csv",
             mime="text/csv",
         )
+
+        if st.session_state.get("token"):
+            st.divider()
+            st.subheader("Delete a Purchase")
+            valid_ids = df["id"].tolist()
+            del_id = st.number_input(
+                "Purchase ID to delete",
+                min_value=1,
+                step=1,
+                help="Enter the ID from the table above.",
+            )
+            if st.button("Delete Purchase", type="primary"):
+                if int(del_id) not in valid_ids:
+                    st.warning(f"ID {int(del_id)} is not in the current page — check the ID and filters.")
+                else:
+                    try:
+                        del_resp = requests.delete(
+                            f"{API_URL}/purchase/{int(del_id)}",
+                            headers=_auth_header(),
+                            timeout=10,
+                        )
+                    except requests.exceptions.ConnectionError:
+                        st.error("Cannot reach the API.")
+                    else:
+                        if del_resp.status_code == 200:
+                            st.success(del_resp.json()["message"])
+                            st.rerun()
+                        elif del_resp.status_code == 404:
+                            st.error("Purchase not found.")
+                        elif del_resp.status_code == 401:
+                            st.error("Session expired — please sign in again.")
+                        else:
+                            st.error(f"Delete failed: {del_resp.text}")
 
     st.subheader("KPIs & Sales Forecast")
     forecast_days = st.number_input("Forecast horizon (days):", min_value=1, max_value=30, value=5)
