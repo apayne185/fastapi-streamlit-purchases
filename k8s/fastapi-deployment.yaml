@@ -29,6 +29,21 @@ spec:
                 configMapKeyRef:
                   name: purchases-config
                   key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: purchases-config
+                  key: REDIS_URL
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: purchases-secret
+                  key: SECRET_KEY
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: purchases-secret
+                  key: ADMIN_PASSWORD
           livenessProbe:
             httpGet:
               path: /healthz

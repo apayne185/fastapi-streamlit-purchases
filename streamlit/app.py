@@ -75,22 +75,35 @@ def _do_register(username: str, password: str, confirm: str):
         st.sidebar.error(resp.json().get("detail", "Registration failed."))
 
 
+def _handle_401():
+    st.session_state.pop("token", None)
+    st.session_state.pop("username", None)
+    st.warning("Your session has expired. Please sign in again.")
+    st.rerun()
+
+
 def api_get(path, params=None):
     try:
-        return requests.get(f"{API_URL}{path}", params=params, headers=_auth_header(), timeout=10)
+        resp = requests.get(f"{API_URL}{path}", params=params, headers=_auth_header(), timeout=10)
     except requests.exceptions.ConnectionError:
         st.error("Cannot reach the API. Is the backend running?")
         st.stop()
+    if resp.status_code == 401 and st.session_state.get("token"):
+        _handle_401()
+    return resp
 
 
 def api_post(path, **kwargs):
     try:
         headers = kwargs.pop("headers", {})
         headers.update(_auth_header())
-        return requests.post(f"{API_URL}{path}", timeout=10, headers=headers, **kwargs)
+        resp = requests.post(f"{API_URL}{path}", timeout=10, headers=headers, **kwargs)
     except requests.exceptions.ConnectionError:
         st.error("Cannot reach the API. Is the backend running?")
         st.stop()
+    if resp.status_code == 401 and st.session_state.get("token"):
+        _handle_401()
+    return resp
 
 
 # ── Sidebar ────────────────────────────────────────────────────────────────────

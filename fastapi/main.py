@@ -7,11 +7,13 @@ import io
 import csv
 import json
 import logging
+import os
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from prometheus_fastapi_instrumentator import Instrumentator
@@ -20,9 +22,28 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
+import redis as redis_lib
+
 from database import get_db, SessionLocal
 from models import PurchaseRecord, UserRecord
 from auth import Token, User, authenticate_user, create_access_token, get_current_user, get_user, create_user
+
+_redis: redis_lib.Redis | None = None
+
+def get_redis() -> redis_lib.Redis | None:
+    global _redis
+    if _redis is None:
+        url = os.getenv("REDIS_URL")
+        if url:
+            try:
+                _redis = redis_lib.from_url(url, decode_responses=True)
+                _redis.ping()
+            except Exception:
+                _redis = None
+    return _redis
+
+KPI_CACHE_KEY = "kpis"
+KPI_TTL = 60  # seconds
 
 
 # --- Structured JSON logger ---
@@ -49,15 +70,23 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 # --- App lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Seed a default admin account if no users exist yet
     with SessionLocal() as db:
         if not db.query(UserRecord).first():
-            create_user(db, "admin", "purchases123", role="admin")
+            admin_password = os.getenv("ADMIN_PASSWORD", "purchases123")
+            create_user(db, "admin", admin_password, role="admin")
             logger.info("Seeded default admin user")
     yield
 
 
 app = FastAPI(title="Customer Purchases API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -72,7 +101,7 @@ class Purchase(BaseModel):
     customer_name: str
     country: str
     purchase_date: date
-    amount: float
+    amount: float = Field(gt=0, description="Must be greater than zero")
     currency: str = "USD"
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -139,6 +168,12 @@ def add_purchase(purchase: Purchase, db: Session = Depends(get_db), _: User = De
     db.add(record)
     db.commit()
     db.refresh(record)
+    try:
+        cache = get_redis()
+        if cache:
+            cache.delete(KPI_CACHE_KEY)
+    except Exception:
+        pass
     logger.info(f"Purchase added: customer={purchase.customer_name} amount={purchase.amount} currency={currency}")
     return record
 
@@ -171,6 +206,12 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends
             raise HTTPException(status_code=400, detail=f"Error processing row: {row} — {e}")
 
     db.commit()
+    try:
+        cache = get_redis()
+        if cache:
+            cache.delete(KPI_CACHE_KEY)
+    except Exception:
+        pass
     logger.info(f"Bulk upload: {len(new_records)} purchases added")
     return JSONResponse(content={"added": len(new_records)})
 
@@ -182,8 +223,8 @@ def get_purchases(
     country: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    limit: int = 500,
-    offset: int = 0,
+    limit: int = Query(default=500, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
     query = db.query(PurchaseRecord).filter(PurchaseRecord.deleted_at.is_(None))
@@ -210,13 +251,30 @@ def delete_purchase(
         raise HTTPException(status_code=404, detail="Purchase not found")
     record.deleted_at = datetime.now(timezone.utc)
     db.commit()
+    try:
+        cache = get_redis()
+        if cache:
+            cache.delete(KPI_CACHE_KEY)
+    except Exception:
+        pass
     logger.info(f"Purchase {purchase_id} soft-deleted by {current_user.username}")
     return {"message": f"Purchase {purchase_id} deleted"}
 
 
 @app.get("/purchases/kpis")
 @limiter.limit("30/minute")
-def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session = Depends(get_db)):
+def get_kpis(request: Request, forecast_days: Optional[int] = Query(default=None, ge=1, le=90), db: Session = Depends(get_db)):
+    # Only cache the no-forecast variant — forecasts are parameterised and cheap to recompute
+    cache = get_redis()
+    if cache and not forecast_days:
+        try:
+            cached = cache.get(KPI_CACHE_KEY)
+            if cached:
+                logger.info("KPI cache hit")
+                return json.loads(cached)
+        except Exception:
+            pass
+
     records = db.query(PurchaseRecord).filter(PurchaseRecord.deleted_at.is_(None)).all()
     if not records:
         raise HTTPException(status_code=404, detail="No purchase data")
@@ -247,8 +305,17 @@ def get_kpis(request: Request, forecast_days: Optional[int] = None, db: Session 
         predicted = model.fit().forecast(forecast_days)
         sales_forecast = {f"Day {i + 1}": round(predicted[i], 2) for i in range(forecast_days)}
 
-    return {
+    result = {
         "mean_purchases_per_client": avg_per_client,
         "clients_per_country": country_counts,
         "sales_forecast": sales_forecast if forecast_days else "Not requested",
     }
+
+    if cache and not forecast_days:
+        try:
+            cache.setex(KPI_CACHE_KEY, KPI_TTL, json.dumps(result))
+            logger.info("KPI cache set")
+        except Exception:
+            pass
+
+    return result

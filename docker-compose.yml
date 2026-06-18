@@ -22,6 +22,14 @@ services:
       postgres:
         condition: service_healthy
 
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   fastapi:
     build: ./fastapi
     ports:
@@ -29,11 +37,15 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/purchases
       SECRET_KEY: ${SECRET_KEY:-dev-secret-change-in-production}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-purchases123}
+      REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      redis:
+        condition: service_healthy
 
   streamlit:
     build: ./streamlit
