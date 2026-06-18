@@ -40,6 +40,11 @@ spec:
                 configMapKeyRef:
                   name: purchases-config
                   key: DATABASE_URL
+            - name: REDIS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: purchases-config
+                  key: REDIS_URL
           livenessProbe:
             httpGet:
               path: /healthz
