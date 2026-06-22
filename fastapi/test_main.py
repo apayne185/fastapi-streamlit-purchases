@@ -1,43 +1,47 @@
+import asyncio
 import os
 import pytest
 from fastapi.testclient import TestClient
 from datetime import date
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.pool import NullPool
 
 os.environ["RATELIMIT_ENABLED"] = "false"
 
 from database import Base, get_db
 from main import app
 
-SQLITE_URL = "sqlite:///./test_purchases.db"
-test_engine = create_engine(SQLITE_URL, connect_args={"check_same_thread": False})
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
+SQLITE_URL = "sqlite+aiosqlite:///./test_purchases.db"
+test_engine = create_async_engine(SQLITE_URL, poolclass=NullPool)
+TestingSessionLocal = async_sessionmaker(test_engine, expire_on_commit=False, class_=AsyncSession)
 
 
-def override_get_db():
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def override_get_db():
+    async with TestingSessionLocal() as session:
+        yield session
 
 
 app.dependency_overrides[get_db] = override_get_db
-
 client = TestClient(app)
 
 
 @pytest.fixture(autouse=True)
 def setup_db():
-    Base.metadata.create_all(bind=test_engine)
+    async def _create():
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+    async def _drop():
+        async with test_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+
+    asyncio.run(_create())
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    asyncio.run(_drop())
 
 
 @pytest.fixture
 def auth_headers():
-    """Register a test user and return a valid Bearer token header."""
     client.post("/register", json={"username": "testuser", "password": "testpass123"})
     resp = client.post("/token", data={"username": "testuser", "password": "testpass123"})
     token = resp.json()["access_token"]
@@ -176,6 +180,32 @@ def test_bulk_upload_invalid_content_type(auth_headers):
     assert response.status_code == 400
 
 
+# --- Soft Delete ---
+
+def test_delete_purchase(auth_headers, sample_purchase):
+    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    purchase_id = add_resp.json()["id"]
+    del_resp = client.delete(f"/purchase/{purchase_id}", headers=auth_headers)
+    assert del_resp.status_code == 200
+    assert "deleted" in del_resp.json()["message"]
+    get_resp = client.get("/purchases/")
+    assert all(p["id"] != purchase_id for p in get_resp.json())
+
+
+def test_delete_purchase_unauthenticated(auth_headers, sample_purchase):
+    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    purchase_id = add_resp.json()["id"]
+    del_resp = client.delete(f"/purchase/{purchase_id}")
+    assert del_resp.status_code == 401
+
+
+def test_delete_purchase_not_found(auth_headers):
+    del_resp = client.delete("/purchase/99999", headers=auth_headers)
+    assert del_resp.status_code == 404
+
+
+# --- Input validation ---
+
 def test_add_purchase_negative_amount(auth_headers):
     response = client.post("/purchase/", json={
         "customer_name": "Test", "country": "US",
@@ -201,28 +231,3 @@ def test_get_kpis_forecast_days_exceeded(auth_headers, sample_purchase):
     client.post("/purchase/", json=sample_purchase, headers=auth_headers)
     response = client.get("/purchases/kpis?forecast_days=999")
     assert response.status_code == 422
-
-
-# --- Soft Delete ---
-
-def test_delete_purchase(auth_headers, sample_purchase):
-    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
-    purchase_id = add_resp.json()["id"]
-    del_resp = client.delete(f"/purchase/{purchase_id}", headers=auth_headers)
-    assert del_resp.status_code == 200
-    assert "deleted" in del_resp.json()["message"]
-    # Should no longer appear in GET
-    get_resp = client.get("/purchases/")
-    assert all(p["id"] != purchase_id for p in get_resp.json())
-
-
-def test_delete_purchase_unauthenticated(auth_headers, sample_purchase):
-    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
-    purchase_id = add_resp.json()["id"]
-    del_resp = client.delete(f"/purchase/{purchase_id}")
-    assert del_resp.status_code == 401
-
-
-def test_delete_purchase_not_found(auth_headers):
-    del_resp = client.delete("/purchase/99999", headers=auth_headers)
-    assert del_resp.status_code == 404

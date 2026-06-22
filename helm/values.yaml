@@ -43,3 +43,6 @@ ingress:
   className: nginx
   uiHost: purchases.local
   apiHost: api.purchases.local
+
+telemetry:
+  otlpEndpoint: http://jaeger-service:4317  # set to "" to disable tracing

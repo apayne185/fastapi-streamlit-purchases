@@ -7,7 +7,8 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
 
@@ -36,22 +37,23 @@ def verify_password(plain: str, hashed: str) -> bool:
     return bcrypt.checkpw(plain.encode(), hashed.encode())
 
 
-def get_user(db: Session, username: str):
+async def get_user(db: AsyncSession, username: str):
     from models import UserRecord
-    return db.query(UserRecord).filter(UserRecord.username == username).first()
+    result = await db.execute(select(UserRecord).where(UserRecord.username == username))
+    return result.scalar_one_or_none()
 
 
-def create_user(db: Session, username: str, password: str, role: str = "user"):
+async def create_user(db: AsyncSession, username: str, password: str, role: str = "user"):
     from models import UserRecord
     record = UserRecord(username=username, hashed_password=hash_password(password), role=role)
     db.add(record)
-    db.commit()
-    db.refresh(record)
+    await db.commit()
+    await db.refresh(record)
     return record
 
 
-def authenticate_user(db: Session, username: str, password: str) -> Optional[User]:
-    record = get_user(db, username)
+async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
+    record = await get_user(db, username)
     if not record or not verify_password(password, record.hashed_password):
         return None
     return User(username=record.username, role=record.role)
@@ -64,7 +66,7 @@ def create_access_token(username: str) -> str:
 
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ) -> User:
     exc = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -78,7 +80,7 @@ async def get_current_user(
             raise exc
     except JWTError:
         raise exc
-    record = get_user(db, username)
+    record = await get_user(db, username)
     if not record:
         raise exc
     return User(username=record.username, role=record.role)

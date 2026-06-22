@@ -6,4 +6,4 @@ fastapi/test_purchases.db
 **/__pycache__/
 *.pyc
 .coverage
-htmlcov/
+htmlcov/*.cover

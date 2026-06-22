@@ -34,6 +34,11 @@ spec:
                 configMapKeyRef:
                   name: purchases-config
                   key: REDIS_URL
+            - name: OTLP_ENDPOINT
+              valueFrom:
+                configMapKeyRef:
+                  name: purchases-config
+                  key: OTLP_ENDPOINT
             - name: SECRET_KEY
               valueFrom:
                 secretKeyRef:
