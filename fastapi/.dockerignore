@@ -5,6 +5,6 @@ venv/
 .venv/
 .coverage
 htmlcov/
-test_purchases.db
+*.db
 .pytest_cache/
 alembic/__pycache__/
