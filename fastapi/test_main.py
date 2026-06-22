@@ -180,6 +180,18 @@ def test_bulk_upload_invalid_content_type(auth_headers):
     assert response.status_code == 400
 
 
+def test_bulk_upload_negative_amount(auth_headers):
+    csv_data = b"customer_name,country,purchase_date,amount,currency\nAlice,USA,2024-12-05,-50.0,USD"
+    response = client.post("/purchase/bulk/", files={"file": ("f.csv", csv_data, "text/csv")}, headers=auth_headers)
+    assert response.status_code == 400
+
+
+def test_bulk_upload_zero_amount(auth_headers):
+    csv_data = b"customer_name,country,purchase_date,amount,currency\nAlice,USA,2024-12-05,0.0,USD"
+    response = client.post("/purchase/bulk/", files={"file": ("f.csv", csv_data, "text/csv")}, headers=auth_headers)
+    assert response.status_code == 400
+
+
 # --- Soft Delete ---
 
 def test_delete_purchase(auth_headers, sample_purchase):

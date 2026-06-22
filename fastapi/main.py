@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -223,7 +224,11 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=409, detail="Username already taken")
     result = await db.execute(select(func.count()).select_from(UserRecord))
     role = "admin" if result.scalar() == 0 else "user"
-    record = await create_user(db, req.username.strip(), req.password, role=role)
+    try:
+        record = await create_user(db, req.username.strip(), req.password, role=role)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Username already taken")
     logger.info(f"New user registered: {record.username} (role={record.role})")
     return User(username=record.username, role=record.role)
 
@@ -288,11 +293,15 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: AsyncSession = De
             raw_currency = (row.get("currency") or "USD").strip().upper()
             if raw_currency not in SUPPORTED_CURRENCIES:
                 raw_currency = "USD"
+            amount = float(row["amount"].strip())
+            if amount <= 0:
+                await db.rollback()
+                raise HTTPException(status_code=400, detail=f"Amount must be greater than zero, got {amount}")
             record = PurchaseRecord(
                 customer_name=row["customer_name"].strip(),
                 country=row["country"].strip(),
                 purchase_date=datetime.strptime(row["purchase_date"].strip(), "%Y-%m-%d").date(),
-                amount=float(row["amount"].strip()),
+                amount=amount,
                 currency=raw_currency,
             )
             db.add(record)
@@ -424,7 +433,7 @@ async def get_kpis(
     result_data = {
         "mean_purchases_per_client": avg_per_client,
         "clients_per_country": country_counts,
-        "sales_forecast": sales_forecast if forecast_days else "Not requested",
+        "sales_forecast": sales_forecast,
     }
 
     if cache and not forecast_days:

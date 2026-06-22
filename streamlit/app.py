@@ -495,7 +495,7 @@ elif tab == "Analyze Purchases":
                 fig.update_layout(coloraxis_showscale=False, xaxis_title=None)
                 st.plotly_chart(fig, use_container_width=True)
 
-        if kpi.get("sales_forecast") and kpi["sales_forecast"] != "Not requested":
+        if kpi.get("sales_forecast"):
             st.subheader(f"Sales Forecast — Next {forecast_days} Days")
             df_forecast = pd.DataFrame(
                 kpi["sales_forecast"].items(), columns=["Day", "Projected Revenue ($)"]
