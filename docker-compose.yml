@@ -30,6 +30,14 @@ services:
       timeout: 5s
       retries: 5
 
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC receiver
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+
   fastapi:
     build: ./fastapi
     ports:
@@ -39,6 +47,7 @@ services:
       SECRET_KEY: ${SECRET_KEY:-dev-secret-change-in-production}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-purchases123}
       REDIS_URL: redis://redis:6379
+      OTLP_ENDPOINT: http://jaeger:4317
     depends_on:
       postgres:
         condition: service_healthy

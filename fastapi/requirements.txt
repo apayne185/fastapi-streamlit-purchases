@@ -9,6 +9,8 @@ httpx
 pytest
 sqlalchemy
 psycopg2-binary
+asyncpg
+aiosqlite
 prometheus-fastapi-instrumentator
 slowapi
 alembic
@@ -16,3 +18,8 @@ pytest-cov
 python-jose[cryptography]
 bcrypt
 redis
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-instrumentation-sqlalchemy
+opentelemetry-exporter-otlp-proto-grpc

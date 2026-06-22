@@ -14,8 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy import select, func, text
+from sqlalchemy.ext.asyncio import AsyncSession
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -24,11 +24,31 @@ from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 import redis as redis_lib
 
-from database import get_db, SessionLocal
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+from opentelemetry.sdk.resources import Resource, SERVICE_NAME
+
+from database import get_db, AsyncSessionLocal, engine
 from models import PurchaseRecord, UserRecord
 from auth import Token, User, authenticate_user, create_access_token, get_current_user, get_user, create_user
 
+# --- OpenTelemetry tracing ---
+_otlp_endpoint = os.getenv("OTLP_ENDPOINT", "")
+if _otlp_endpoint:
+    _resource = Resource.create({SERVICE_NAME: "purchases-api"})
+    _provider = TracerProvider(resource=_resource)
+    _provider.add_span_processor(
+        BatchSpanProcessor(OTLPSpanExporter(endpoint=_otlp_endpoint, insecure=True))
+    )
+    trace.set_tracer_provider(_provider)
+
+# --- Redis ---
 _redis: redis_lib.Redis | None = None
+
 
 def get_redis() -> redis_lib.Redis | None:
     global _redis
@@ -42,8 +62,9 @@ def get_redis() -> redis_lib.Redis | None:
                 _redis = None
     return _redis
 
+
 KPI_CACHE_KEY = "kpis"
-KPI_TTL = 60  # seconds
+KPI_TTL = 60
 
 
 # --- Structured JSON logger ---
@@ -55,6 +76,7 @@ class _JSONFormatter(logging.Formatter):
             "message": record.getMessage(),
             "module": record.module,
         })
+
 
 _handler = logging.StreamHandler()
 _handler.setFormatter(_JSONFormatter())
@@ -70,15 +92,18 @@ limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 # --- App lifespan ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    with SessionLocal() as db:
-        if not db.query(UserRecord).first():
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(UserRecord).limit(1))
+        if not result.scalar_one_or_none():
             admin_password = os.getenv("ADMIN_PASSWORD", "purchases123")
-            create_user(db, "admin", admin_password, role="admin")
+            await create_user(db, "admin", admin_password, role="admin")
             logger.info("Seeded default admin user")
     yield
 
 
 app = FastAPI(title="Customer Purchases API", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -87,15 +112,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 Instrumentator().instrument(app).expose(app)
+FastAPIInstrumentor.instrument_app(app)
+SQLAlchemyInstrumentor().instrument(engine=engine.sync_engine)
+
+SUPPORTED_CURRENCIES = {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "SEK", "NOK", "DKK"}
 
 
-SUPPORTED_CURRENCIES = {"USD","EUR","GBP","JPY","CAD","AUD","CHF","SEK","NOK","DKK"}
-
-# --- Pydantic schema ---
+# --- Pydantic schemas ---
 class Purchase(BaseModel):
     id: Optional[int] = None
     customer_name: str
@@ -109,46 +134,46 @@ class Purchase(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# --- Health / readiness probes ---
+# --- Health / readiness ---
 @app.get("/healthz", tags=["ops"])
 def health_check():
     return {"status": "healthy"}
 
 
 @app.get("/readyz", tags=["ops"])
-def readiness_check(db: Session = Depends(get_db)):
+async def readiness_check(db: AsyncSession = Depends(get_db)):
     try:
-        db.execute(text("SELECT 1"))
+        await db.execute(text("SELECT 1"))
         return {"status": "ready"}
     except Exception:
         raise HTTPException(status_code=503, detail="Database not ready")
 
 
 # --- Auth endpoints ---
-
 class RegisterRequest(BaseModel):
     username: str
     password: str
 
 
 @app.post("/token", response_model=Token, tags=["auth"])
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(db, form_data.username, form_data.password)
+async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+    user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     return Token(access_token=create_access_token(user.username), token_type="bearer")
 
 
 @app.post("/register", response_model=User, tags=["auth"])
-def register(req: RegisterRequest, db: Session = Depends(get_db)):
+async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     if len(req.username.strip()) < 3:
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
     if len(req.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
-    if get_user(db, req.username):
+    if await get_user(db, req.username):
         raise HTTPException(status_code=409, detail="Username already taken")
-    role = "admin" if db.query(UserRecord).count() == 0 else "user"
-    record = create_user(db, req.username.strip(), req.password, role=role)
+    result = await db.execute(select(func.count()).select_from(UserRecord))
+    role = "admin" if result.scalar() == 0 else "user"
+    record = await create_user(db, req.username.strip(), req.password, role=role)
     logger.info(f"New user registered: {record.username} (role={record.role})")
     return User(username=record.username, role=record.role)
 
@@ -159,15 +184,15 @@ async def read_current_user(current_user: User = Depends(get_current_user)):
 
 
 # --- Purchase endpoints ---
-@app.post("/purchase/", response_model=Purchase)
-def add_purchase(purchase: Purchase, db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+@app.post("/purchase/", response_model=Purchase, tags=["purchases"])
+async def add_purchase(purchase: Purchase, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
     currency = purchase.currency.upper()
     if currency not in SUPPORTED_CURRENCIES:
         raise HTTPException(status_code=400, detail=f"Unsupported currency: {currency}")
     record = PurchaseRecord(**{**purchase.model_dump(), "currency": currency})
     db.add(record)
-    db.commit()
-    db.refresh(record)
+    await db.commit()
+    await db.refresh(record)
     try:
         cache = get_redis()
         if cache:
@@ -178,8 +203,8 @@ def add_purchase(purchase: Purchase, db: Session = Depends(get_db), _: User = De
     return record
 
 
-@app.post("/purchase/bulk/")
-async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends(get_db), _: User = Depends(get_current_user)):
+@app.post("/purchase/bulk/", tags=["purchases"])
+async def add_bulk_purchases(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
     if file.content_type not in ["text/csv"]:
         raise HTTPException(status_code=400, detail="Invalid file format")
 
@@ -202,10 +227,10 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends
             db.add(record)
             new_records.append(record)
         except Exception as e:
-            db.rollback()
+            await db.rollback()
             raise HTTPException(status_code=400, detail=f"Error processing row: {row} — {e}")
 
-    db.commit()
+    await db.commit()
     try:
         cache = get_redis()
         if cache:
@@ -216,41 +241,46 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: Session = Depends
     return JSONResponse(content={"added": len(new_records)})
 
 
-@app.get("/purchases/", response_model=List[Purchase])
+@app.get("/purchases/", response_model=List[Purchase], tags=["purchases"])
 @limiter.limit("100/minute")
-def get_purchases(
+async def get_purchases(
     request: Request,
     country: Optional[str] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     limit: int = Query(default=500, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
 ):
-    query = db.query(PurchaseRecord).filter(PurchaseRecord.deleted_at.is_(None))
+    stmt = select(PurchaseRecord).where(PurchaseRecord.deleted_at.is_(None))
     if country:
-        query = query.filter(PurchaseRecord.country.ilike(country))
+        stmt = stmt.where(PurchaseRecord.country.ilike(country))
     if start_date:
-        query = query.filter(PurchaseRecord.purchase_date >= start_date)
+        stmt = stmt.where(PurchaseRecord.purchase_date >= start_date)
     if end_date:
-        query = query.filter(PurchaseRecord.purchase_date <= end_date)
-    return query.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset).all()
+        stmt = stmt.where(PurchaseRecord.purchase_date <= end_date)
+    stmt = stmt.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 
 @app.delete("/purchase/{purchase_id}", tags=["purchases"])
-def delete_purchase(
+async def delete_purchase(
     purchase_id: int,
-    db: Session = Depends(get_db),
+    db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    record = db.query(PurchaseRecord).filter(
-        PurchaseRecord.id == purchase_id,
-        PurchaseRecord.deleted_at.is_(None),
-    ).first()
+    result = await db.execute(
+        select(PurchaseRecord).where(
+            PurchaseRecord.id == purchase_id,
+            PurchaseRecord.deleted_at.is_(None),
+        )
+    )
+    record = result.scalar_one_or_none()
     if not record:
         raise HTTPException(status_code=404, detail="Purchase not found")
     record.deleted_at = datetime.now(timezone.utc)
-    db.commit()
+    await db.commit()
     try:
         cache = get_redis()
         if cache:
@@ -261,10 +291,13 @@ def delete_purchase(
     return {"message": f"Purchase {purchase_id} deleted"}
 
 
-@app.get("/purchases/kpis")
+@app.get("/purchases/kpis", tags=["purchases"])
 @limiter.limit("30/minute")
-def get_kpis(request: Request, forecast_days: Optional[int] = Query(default=None, ge=1, le=90), db: Session = Depends(get_db)):
-    # Only cache the no-forecast variant — forecasts are parameterised and cheap to recompute
+async def get_kpis(
+    request: Request,
+    forecast_days: Optional[int] = Query(default=None, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+):
     cache = get_redis()
     if cache and not forecast_days:
         try:
@@ -275,7 +308,8 @@ def get_kpis(request: Request, forecast_days: Optional[int] = Query(default=None
         except Exception:
             pass
 
-    records = db.query(PurchaseRecord).filter(PurchaseRecord.deleted_at.is_(None)).all()
+    result = await db.execute(select(PurchaseRecord).where(PurchaseRecord.deleted_at.is_(None)))
+    records = result.scalars().all()
     if not records:
         raise HTTPException(status_code=404, detail="No purchase data")
 
@@ -293,19 +327,16 @@ def get_kpis(request: Request, forecast_days: Optional[int] = Query(default=None
         all_dates = sorted({p.purchase_date for p in records})
         if len(all_dates) < 2:
             raise HTTPException(status_code=400, detail="Need at least 2 days of purchase data for forecasting")
-
         min_date, max_date = all_dates[0], all_dates[-1]
         date_range = [min_date + timedelta(days=i) for i in range((max_date - min_date).days + 1)]
         daily_sales = [sum(p.amount for p in records if p.purchase_date == d) for d in date_range]
-
         if len(daily_sales) < 2:
             raise HTTPException(status_code=400, detail="Need more data for forecasting")
-
         model = ExponentialSmoothing(daily_sales, trend="add", seasonal=None)
         predicted = model.fit().forecast(forecast_days)
         sales_forecast = {f"Day {i + 1}": round(predicted[i], 2) for i in range(forecast_days)}
 
-    result = {
+    result_data = {
         "mean_purchases_per_client": avg_per_client,
         "clients_per_country": country_counts,
         "sales_forecast": sales_forecast if forecast_days else "Not requested",
@@ -313,9 +344,9 @@ def get_kpis(request: Request, forecast_days: Optional[int] = Query(default=None
 
     if cache and not forecast_days:
         try:
-            cache.setex(KPI_CACHE_KEY, KPI_TTL, json.dumps(result))
+            cache.setex(KPI_CACHE_KEY, KPI_TTL, json.dumps(result_data))
             logger.info("KPI cache set")
         except Exception:
             pass
 
-    return result
+    return result_data

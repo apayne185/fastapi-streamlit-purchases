@@ -1,5 +1,6 @@
-from sqlalchemy import create_engine, MetaData
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy import MetaData
+from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 import os
 
 NAMING_CONVENTION = {
@@ -10,27 +11,34 @@ NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
-DATABASE_URL = os.getenv(
+_DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/purchases"
+    "postgresql://postgres:postgres@localhost:5432/purchases",
 )
 
-engine = create_engine(
-    DATABASE_URL,
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,
+# Convert sync URL to the appropriate async driver
+if _DATABASE_URL.startswith("postgresql://"):
+    ASYNC_DATABASE_URL = _DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+elif _DATABASE_URL.startswith("sqlite:///"):
+    ASYNC_DATABASE_URL = _DATABASE_URL.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+else:
+    ASYNC_DATABASE_URL = _DATABASE_URL
+
+_is_sqlite = ASYNC_DATABASE_URL.startswith("sqlite")
+
+engine = create_async_engine(
+    ASYNC_DATABASE_URL,
+    pool_pre_ping=not _is_sqlite,
+    **({} if _is_sqlite else {"pool_size": 5, "max_overflow": 10}),
 )
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+async def get_db():
+    async with AsyncSessionLocal() as session:
+        yield session
