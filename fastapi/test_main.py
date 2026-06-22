@@ -204,6 +204,49 @@ def test_delete_purchase_not_found(auth_headers):
     assert del_resp.status_code == 404
 
 
+# --- Token refresh ---
+
+def test_login_returns_refresh_token():
+    client.post("/register", json={"username": "refreshuser", "password": "testpass123"})
+    resp = client.post("/token", data={"username": "refreshuser", "password": "testpass123"})
+    assert resp.status_code == 200
+    assert "refresh_token" in resp.json()
+    assert "access_token" in resp.json()
+
+
+def test_refresh_token_success():
+    client.post("/register", json={"username": "refreshuser2", "password": "testpass123"})
+    login_resp = client.post("/token", data={"username": "refreshuser2", "password": "testpass123"})
+    refresh_token = login_resp.json()["refresh_token"]
+    resp = client.post("/token/refresh", json={"refresh_token": refresh_token})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "access_token" in data
+    assert "refresh_token" in data
+
+
+def test_refresh_token_rotated():
+    client.post("/register", json={"username": "refreshuser3", "password": "testpass123"})
+    login_resp = client.post("/token", data={"username": "refreshuser3", "password": "testpass123"})
+    old_refresh = login_resp.json()["refresh_token"]
+    resp = client.post("/token/refresh", json={"refresh_token": old_refresh})
+    new_refresh = resp.json()["refresh_token"]
+    assert old_refresh != new_refresh
+
+
+def test_refresh_token_invalid():
+    resp = client.post("/token/refresh", json={"refresh_token": "not.a.valid.token"})
+    assert resp.status_code == 401
+
+
+def test_refresh_token_rejects_access_token():
+    client.post("/register", json={"username": "refreshuser4", "password": "testpass123"})
+    login_resp = client.post("/token", data={"username": "refreshuser4", "password": "testpass123"})
+    access_token = login_resp.json()["access_token"]
+    resp = client.post("/token/refresh", json={"refresh_token": access_token})
+    assert resp.status_code == 401
+
+
 # --- Input validation ---
 
 def test_add_purchase_negative_amount(auth_headers):

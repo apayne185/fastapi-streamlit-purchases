@@ -41,7 +41,9 @@ def _do_login(username: str, password: str):
         st.sidebar.error("Cannot reach the API.")
         return
     if resp.status_code == 200:
-        st.session_state.token = resp.json()["access_token"]
+        data = resp.json()
+        st.session_state.token = data["access_token"]
+        st.session_state.refresh_token = data["refresh_token"]
         st.session_state.username = username
         st.rerun()
     else:
@@ -75,8 +77,28 @@ def _do_register(username: str, password: str, confirm: str):
         st.sidebar.error(resp.json().get("detail", "Registration failed."))
 
 
+def _try_refresh() -> bool:
+    """Attempt a silent token refresh. Returns True if successful."""
+    rt = st.session_state.get("refresh_token")
+    if not rt:
+        return False
+    try:
+        resp = requests.post(f"{API_URL}/token/refresh", json={"refresh_token": rt}, timeout=10)
+    except requests.exceptions.ConnectionError:
+        return False
+    if resp.status_code == 200:
+        data = resp.json()
+        st.session_state.token = data["access_token"]
+        st.session_state.refresh_token = data["refresh_token"]
+        return True
+    return False
+
+
 def _handle_401():
+    if _try_refresh():
+        st.rerun()
     st.session_state.pop("token", None)
+    st.session_state.pop("refresh_token", None)
     st.session_state.pop("username", None)
     st.warning("Your session has expired. Please sign in again.")
     st.rerun()
@@ -115,6 +137,7 @@ if st.session_state.get("token"):
     st.sidebar.success(f"Signed in as **{st.session_state.username}**")
     if st.sidebar.button("Sign out"):
         st.session_state.pop("token", None)
+        st.session_state.pop("refresh_token", None)
         st.session_state.pop("username", None)
         st.rerun()
 else:

@@ -33,7 +33,11 @@ from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
 from database import get_db, AsyncSessionLocal, engine
 from models import PurchaseRecord, UserRecord
-from auth import Token, User, authenticate_user, create_access_token, get_current_user, get_user, create_user
+from auth import (
+    Token, User, authenticate_user,
+    create_access_token, create_refresh_token, verify_refresh_token,
+    get_current_user, get_user, create_user,
+)
 
 # --- OpenTelemetry tracing ---
 _otlp_endpoint = os.getenv("OTLP_ENDPOINT", "")
@@ -172,7 +176,33 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Incorrect username or password")
-    return Token(access_token=create_access_token(user.username), token_type="bearer")
+    return Token(
+        access_token=create_access_token(user.username),
+        refresh_token=create_refresh_token(user.username),
+        token_type="bearer",
+    )
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@app.post(
+    "/token/refresh",
+    response_model=Token,
+    tags=["auth"],
+    responses={401: {"model": ErrorDetail, "description": "Invalid or expired refresh token"}},
+)
+async def refresh_token(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
+    username = verify_refresh_token(req.refresh_token)
+    record = await get_user(db, username)
+    if not record:
+        raise HTTPException(status_code=401, detail="User not found")
+    return Token(
+        access_token=create_access_token(username),
+        refresh_token=create_refresh_token(username),
+        token_type="bearer",
+    )
 
 
 @app.post(

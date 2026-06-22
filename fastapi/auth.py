@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import os
+import uuid
 
 import bcrypt
 from fastapi import Depends, HTTPException, status
@@ -15,12 +16,14 @@ from database import get_db
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-in-production")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+REFRESH_TOKEN_EXPIRE_DAYS = 7
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
 
 
@@ -61,7 +64,34 @@ async def authenticate_user(db: AsyncSession, username: str, password: str) -> O
 
 def create_access_token(username: str) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    return jwt.encode({"sub": username, "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
+    return jwt.encode({"sub": username, "exp": expire, "type": "access"}, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def create_refresh_token(username: str) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
+    return jwt.encode(
+        {"sub": username, "exp": expire, "type": "refresh", "jti": str(uuid.uuid4())},
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+
+
+def verify_refresh_token(token: str) -> str:
+    exc = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired refresh token",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "refresh":
+            raise exc
+        username: str = payload.get("sub")
+        if not username:
+            raise exc
+        return username
+    except JWTError:
+        raise exc
 
 
 async def get_current_user(
@@ -75,6 +105,8 @@ async def get_current_user(
     )
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if payload.get("type") != "access":
+            raise exc
         username: str = payload.get("sub")
         if not username:
             raise exc
