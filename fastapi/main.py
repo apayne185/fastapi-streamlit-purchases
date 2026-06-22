@@ -11,7 +11,6 @@ import os
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, text
@@ -121,6 +120,14 @@ SUPPORTED_CURRENCIES = {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "SEK", 
 
 
 # --- Pydantic schemas ---
+class ErrorDetail(BaseModel):
+    detail: str
+
+
+class BulkUploadResult(BaseModel):
+    added: int
+
+
 class Purchase(BaseModel):
     id: Optional[int] = None
     customer_name: str
@@ -140,7 +147,7 @@ def health_check():
     return {"status": "healthy"}
 
 
-@app.get("/readyz", tags=["ops"])
+@app.get("/readyz", tags=["ops"], responses={503: {"model": ErrorDetail, "description": "Database not ready"}})
 async def readiness_check(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(text("SELECT 1"))
@@ -155,7 +162,12 @@ class RegisterRequest(BaseModel):
     password: str
 
 
-@app.post("/token", response_model=Token, tags=["auth"])
+@app.post(
+    "/token",
+    response_model=Token,
+    tags=["auth"],
+    responses={401: {"model": ErrorDetail, "description": "Incorrect username or password"}},
+)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
     user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
@@ -163,7 +175,15 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     return Token(access_token=create_access_token(user.username), token_type="bearer")
 
 
-@app.post("/register", response_model=User, tags=["auth"])
+@app.post(
+    "/register",
+    response_model=User,
+    tags=["auth"],
+    responses={
+        400: {"model": ErrorDetail, "description": "Validation error (username/password too short)"},
+        409: {"model": ErrorDetail, "description": "Username already taken"},
+    },
+)
 async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     if len(req.username.strip()) < 3:
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
@@ -178,13 +198,26 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     return User(username=record.username, role=record.role)
 
 
-@app.get("/users/me", response_model=User, tags=["auth"])
+@app.get(
+    "/users/me",
+    response_model=User,
+    tags=["auth"],
+    responses={401: {"model": ErrorDetail, "description": "Invalid or expired token"}},
+)
 async def read_current_user(current_user: User = Depends(get_current_user)):
     return current_user
 
 
 # --- Purchase endpoints ---
-@app.post("/purchase/", response_model=Purchase, tags=["purchases"])
+@app.post(
+    "/purchase/",
+    response_model=Purchase,
+    tags=["purchases"],
+    responses={
+        400: {"model": ErrorDetail, "description": "Unsupported currency"},
+        401: {"model": ErrorDetail, "description": "Not authenticated"},
+    },
+)
 async def add_purchase(purchase: Purchase, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
     currency = purchase.currency.upper()
     if currency not in SUPPORTED_CURRENCIES:
@@ -203,7 +236,15 @@ async def add_purchase(purchase: Purchase, db: AsyncSession = Depends(get_db), _
     return record
 
 
-@app.post("/purchase/bulk/", tags=["purchases"])
+@app.post(
+    "/purchase/bulk/",
+    response_model=BulkUploadResult,
+    tags=["purchases"],
+    responses={
+        400: {"model": ErrorDetail, "description": "Invalid file format or malformed CSV row"},
+        401: {"model": ErrorDetail, "description": "Not authenticated"},
+    },
+)
 async def add_bulk_purchases(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
     if file.content_type not in ["text/csv"]:
         raise HTTPException(status_code=400, detail="Invalid file format")
@@ -238,7 +279,7 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: AsyncSession = De
     except Exception:
         pass
     logger.info(f"Bulk upload: {len(new_records)} purchases added")
-    return JSONResponse(content={"added": len(new_records)})
+    return BulkUploadResult(added=len(new_records))
 
 
 @app.get("/purchases/", response_model=List[Purchase], tags=["purchases"])
@@ -264,7 +305,14 @@ async def get_purchases(
     return result.scalars().all()
 
 
-@app.delete("/purchase/{purchase_id}", tags=["purchases"])
+@app.delete(
+    "/purchase/{purchase_id}",
+    tags=["purchases"],
+    responses={
+        401: {"model": ErrorDetail, "description": "Not authenticated"},
+        404: {"model": ErrorDetail, "description": "Purchase not found"},
+    },
+)
 async def delete_purchase(
     purchase_id: int,
     db: AsyncSession = Depends(get_db),
@@ -291,7 +339,14 @@ async def delete_purchase(
     return {"message": f"Purchase {purchase_id} deleted"}
 
 
-@app.get("/purchases/kpis", tags=["purchases"])
+@app.get(
+    "/purchases/kpis",
+    tags=["purchases"],
+    responses={
+        400: {"model": ErrorDetail, "description": "Not enough data for forecast"},
+        404: {"model": ErrorDetail, "description": "No purchase data"},
+    },
+)
 @limiter.limit("30/minute")
 async def get_kpis(
     request: Request,
