@@ -37,7 +37,7 @@ from models import PurchaseRecord, UserRecord
 from auth import (
     Token, User, authenticate_user,
     create_access_token, create_refresh_token, verify_refresh_token,
-    get_current_user, get_user, create_user,
+    get_current_user, require_admin, get_user, create_user,
 )
 
 # --- OpenTelemetry tracing ---
@@ -380,13 +380,14 @@ async def get_purchase(purchase_id: int, db: AsyncSession = Depends(get_db)):
     tags=["purchases"],
     responses={
         401: {"model": ErrorDetail, "description": "Not authenticated"},
+        403: {"model": ErrorDetail, "description": "Admin access required"},
         404: {"model": ErrorDetail, "description": "Purchase not found"},
     },
 )
 async def delete_purchase(
     purchase_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(
         select(PurchaseRecord).where(

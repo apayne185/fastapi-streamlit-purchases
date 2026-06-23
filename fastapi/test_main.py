@@ -231,6 +231,17 @@ def test_delete_purchase_unauthenticated(auth_headers, sample_purchase):
     assert del_resp.status_code == 401
 
 
+def test_delete_purchase_forbidden_for_non_admin(auth_headers, sample_purchase):
+    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    purchase_id = add_resp.json()["id"]
+    # register a second user — gets role=user (not admin)
+    client.post("/register", json={"username": "regularuser", "password": "testpass123"})
+    login = client.post("/token", data={"username": "regularuser", "password": "testpass123"})
+    user_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    del_resp = client.delete(f"/purchase/{purchase_id}", headers=user_headers)
+    assert del_resp.status_code == 403
+
+
 def test_delete_purchase_not_found(auth_headers):
     del_resp = client.delete("/purchase/99999", headers=auth_headers)
     assert del_resp.status_code == 404
