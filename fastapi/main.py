@@ -356,6 +356,25 @@ async def get_purchases(
     return PurchasePage(items=items_result.scalars().all(), total=total, limit=limit, offset=offset)
 
 
+@app.get(
+    "/purchase/{purchase_id}",
+    response_model=Purchase,
+    tags=["purchases"],
+    responses={404: {"model": ErrorDetail, "description": "Purchase not found"}},
+)
+async def get_purchase(purchase_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(PurchaseRecord).where(
+            PurchaseRecord.id == purchase_id,
+            PurchaseRecord.deleted_at.is_(None),
+        )
+    )
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    return record
+
+
 @app.delete(
     "/purchase/{purchase_id}",
     tags=["purchases"],

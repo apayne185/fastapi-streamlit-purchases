@@ -196,6 +196,22 @@ def test_bulk_upload_zero_amount(auth_headers):
     assert response.status_code == 400
 
 
+# --- Single purchase fetch ---
+
+def test_get_purchase_by_id(auth_headers, sample_purchase):
+    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    purchase_id = add_resp.json()["id"]
+    resp = client.get(f"/purchase/{purchase_id}")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == purchase_id
+    assert resp.json()["customer_name"] == sample_purchase["customer_name"]
+
+
+def test_get_purchase_by_id_not_found():
+    resp = client.get("/purchase/99999")
+    assert resp.status_code == 404
+
+
 # --- Soft Delete ---
 
 def test_delete_purchase(auth_headers, sample_purchase):
