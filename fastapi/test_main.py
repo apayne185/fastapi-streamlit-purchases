@@ -143,16 +143,18 @@ def test_get_purchases(auth_headers, sample_purchase):
     client.post("/purchase/", json=sample_purchase, headers=auth_headers)
     response = client.get("/purchases/")
     assert response.status_code == 200
-    assert len(response.json()) == 1
+    body = response.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
 
 
 def test_get_purchases_with_filters(auth_headers, sample_csv):
     client.post("/purchase/bulk/", files={"file": ("purchases.csv", sample_csv, "text/csv")}, headers=auth_headers)
     response = client.get("/purchases/?country=Canada&start_date=2024-12-02&end_date=2024-12-10")
     assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, list)
-    assert all(p["country"].lower() == "canada" for p in data)
+    body = response.json()
+    assert "items" in body and "total" in body
+    assert all(p["country"].lower() == "canada" for p in body["items"])
 
 
 def test_get_kpis(auth_headers, sample_purchase):
@@ -171,7 +173,9 @@ def test_get_kpis_with_forecast():
 def test_get_purchases_empty():
     response = client.get("/purchases/")
     assert response.status_code == 200
-    assert response.json() == []
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0
 
 
 def test_bulk_upload_invalid_content_type(auth_headers):
@@ -201,7 +205,7 @@ def test_delete_purchase(auth_headers, sample_purchase):
     assert del_resp.status_code == 200
     assert "deleted" in del_resp.json()["message"]
     get_resp = client.get("/purchases/")
-    assert all(p["id"] != purchase_id for p in get_resp.json())
+    assert all(p["id"] != purchase_id for p in get_resp.json()["items"])
 
 
 def test_delete_purchase_unauthenticated(auth_headers, sample_purchase):

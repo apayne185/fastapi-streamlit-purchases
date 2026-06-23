@@ -297,7 +297,9 @@ elif tab == "Analyze Purchases":
         st.error("Failed to fetch data")
         st.stop()
 
-    data = response.json()
+    page = response.json()
+    data = page["items"]
+    total = page["total"]
 
     if not data:
         st.info("No purchases found for the selected filters.")
@@ -316,9 +318,10 @@ elif tab == "Analyze Purchases":
     sym = display_currency
 
     current_page = st.session_state.page_offset // page_size + 1
+    total_pages = max(1, -(-total // page_size))  # ceiling division
     st.caption(
         f"Showing {st.session_state.page_offset + 1}–{st.session_state.page_offset + len(df):,} "
-        f"(page {current_page}) — amounts in {display_currency}"
+        f"of {total:,} (page {current_page} of {total_pages}) — amounts in {display_currency}"
     )
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Revenue", f"{sym} {df['amount_display'].sum():,.2f}")
@@ -332,7 +335,7 @@ elif tab == "Analyze Purchases":
             st.session_state.page_offset = max(0, st.session_state.page_offset - page_size)
             st.rerun()
     with next_col:
-        if st.button("Next →", disabled=len(df) < page_size):
+        if st.button("Next →", disabled=st.session_state.page_offset + len(df) >= total):
             st.session_state.page_offset += page_size
             st.rerun()
 

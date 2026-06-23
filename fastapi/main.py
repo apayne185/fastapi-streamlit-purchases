@@ -146,6 +146,13 @@ class Purchase(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PurchasePage(BaseModel):
+    items: List[Purchase]
+    total: int
+    limit: int
+    offset: int
+
+
 # --- Health / readiness ---
 @app.get("/healthz", tags=["ops"])
 def health_check():
@@ -321,7 +328,7 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: AsyncSession = De
     return BulkUploadResult(added=len(new_records))
 
 
-@app.get("/purchases/", response_model=List[Purchase], tags=["purchases"])
+@app.get("/purchases/", response_model=PurchasePage, tags=["purchases"])
 @limiter.limit("100/minute")
 async def get_purchases(
     request: Request,
@@ -332,16 +339,21 @@ async def get_purchases(
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(PurchaseRecord).where(PurchaseRecord.deleted_at.is_(None))
+    base = select(PurchaseRecord).where(PurchaseRecord.deleted_at.is_(None))
     if country:
-        stmt = stmt.where(PurchaseRecord.country.ilike(country))
+        base = base.where(PurchaseRecord.country.ilike(country))
     if start_date:
-        stmt = stmt.where(PurchaseRecord.purchase_date >= start_date)
+        base = base.where(PurchaseRecord.purchase_date >= start_date)
     if end_date:
-        stmt = stmt.where(PurchaseRecord.purchase_date <= end_date)
-    stmt = stmt.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset)
-    result = await db.execute(stmt)
-    return result.scalars().all()
+        base = base.where(PurchaseRecord.purchase_date <= end_date)
+
+    count_result = await db.execute(select(func.count()).select_from(base.subquery()))
+    total = count_result.scalar()
+
+    items_result = await db.execute(
+        base.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset)
+    )
+    return PurchasePage(items=items_result.scalars().all(), total=total, limit=limit, offset=offset)
 
 
 @app.delete(
