@@ -1,6 +1,8 @@
 import { useState } from 'react'
 
 import { parseApiError } from '../api/client'
+import { useAuth } from '../auth/useAuth'
+import { DeletePurchaseButton } from '../components/purchases/DeletePurchaseButton'
 import { PurchaseFilters, type PurchaseFilterValues } from '../components/purchases/PurchaseFilters'
 import { PurchasePagination } from '../components/purchases/PurchasePagination'
 import { PurchaseTable } from '../components/purchases/PurchaseTable'
@@ -12,6 +14,7 @@ const EMPTY_FILTERS: PurchaseFilterValues = { country: '', startDate: '', endDat
 const CSV_HEADERS = ['id', 'customer_name', 'country', 'purchase_date', 'amount', 'currency']
 
 export function PurchasesPage() {
+  const { isAdmin } = useAuth()
   const [filters, setFilters] = useState<PurchaseFilterValues>(EMPTY_FILTERS)
   const [offset, setOffset] = useState(0)
   const [limit, setLimit] = useState(100)
@@ -68,7 +71,16 @@ export function PurchasesPage() {
       )}
 
       <div className="mt-4">
-        <PurchaseTable purchases={data?.items ?? []} isLoading={isLoading} />
+        <PurchaseTable
+          purchases={data?.items ?? []}
+          isLoading={isLoading}
+          renderRowActions={
+            isAdmin
+              ? (purchase) =>
+                  purchase.id !== undefined && <DeletePurchaseButton purchaseId={purchase.id} />
+              : undefined
+          }
+        />
       </div>
 
       {data && (

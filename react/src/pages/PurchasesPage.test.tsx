@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apiClient } from '../api/client'
 import type { PurchasePage as PurchasePageResponse } from '../api/types'
+import { AuthProvider } from '../auth/AuthProvider'
 import { PurchasesPage } from './PurchasesPage'
 
 function page(overrides: Partial<PurchasePageResponse> = {}): PurchasePageResponse {
@@ -33,7 +34,9 @@ function renderPurchasesPage() {
   })
   return render(
     <QueryClientProvider client={queryClient}>
-      <PurchasesPage />
+      <AuthProvider>
+        <PurchasesPage />
+      </AuthProvider>
     </QueryClientProvider>,
   )
 }
