@@ -3,7 +3,9 @@ fastapi/venv/
 fastapi/__pycache__
 .pytest_cache
 fastapi/test_purchases.db
+fastapi/test_tmp.db
 **/__pycache__/
 *.pyc
 .coverage
 htmlcov/*.cover
+*.py,cover
