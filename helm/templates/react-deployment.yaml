@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: react
+  namespace: {{ .Values.namespace }}
+spec:
+  replicas: {{ .Values.react.replicas }}
+  selector:
+    matchLabels:
+      app: react
+  template:
+    metadata:
+      labels:
+        app: react
+    spec:
+      containers:
+        - name: react
+          image: {{ .Values.react.image }}:{{ .Values.react.tag }}
+          imagePullPolicy: {{ .Values.react.imagePullPolicy }}
+          ports:
+            - containerPort: 8080
+          env:
+            - name: API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: purchases-config
+                  key: API_URL
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: {{ .Values.react.resources.requests.cpu }}
+              memory: {{ .Values.react.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.react.resources.limits.cpu }}
+              memory: {{ .Values.react.resources.limits.memory }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: react-service
+  namespace: {{ .Values.namespace }}
+spec:
+  selector:
+    app: react
+  ports:
+    - port: 8080
+      targetPort: 8080
