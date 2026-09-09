@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import MockAdapter from 'axios-mock-adapter'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { apiClient } from '../api/client'
 import type { PurchasePage as PurchasePageResponse } from '../api/types'
@@ -97,5 +97,39 @@ describe('PurchasesPage', () => {
     await user.type(screen.getByLabelText('Country'), 'Tunisia')
 
     await waitFor(() => expect(screen.getByText('1–100 of 1600')).toBeInTheDocument())
+  })
+
+  it('disables Export CSV until purchases have loaded', async () => {
+    mock.onGet('/purchases/').reply(200, page())
+
+    renderPurchasesPage()
+
+    expect(screen.getByRole('button', { name: /export csv/i })).toBeDisabled()
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /export csv/i })).toBeEnabled(),
+    )
+  })
+
+  it('triggers a CSV download of the current page when Export CSV is clicked', async () => {
+    mock.onGet('/purchases/').reply(200, page())
+
+    const user = userEvent.setup()
+    renderPurchasesPage()
+    await waitFor(() => expect(screen.getByRole('button', { name: /export csv/i })).toBeEnabled())
+
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:mock-url')
+    const revokeObjectURL = vi.fn()
+    vi.stubGlobal('URL', { ...URL, createObjectURL, revokeObjectURL })
+
+    await user.click(screen.getByRole('button', { name: /export csv/i }))
+
+    expect(createObjectURL).toHaveBeenCalledOnce()
+    const blob = createObjectURL.mock.calls[0][0] as Blob
+    const text = await blob.text()
+    expect(text).toContain('id,customer_name,country,purchase_date,amount,currency')
+    expect(text).toContain('Katie Brown')
+    expect(revokeObjectURL).toHaveBeenCalledWith('blob:mock-url')
+
+    vi.unstubAllGlobals()
   })
 })

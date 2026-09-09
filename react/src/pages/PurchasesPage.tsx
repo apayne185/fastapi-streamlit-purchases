@@ -4,9 +4,12 @@ import { parseApiError } from '../api/client'
 import { PurchaseFilters, type PurchaseFilterValues } from '../components/purchases/PurchaseFilters'
 import { PurchasePagination } from '../components/purchases/PurchasePagination'
 import { PurchaseTable } from '../components/purchases/PurchaseTable'
+import { Button } from '../components/ui/Button'
 import { usePurchases } from '../hooks/usePurchases'
+import { toCsv } from '../lib/csv'
 
 const EMPTY_FILTERS: PurchaseFilterValues = { country: '', startDate: '', endDate: '' }
+const CSV_HEADERS = ['id', 'customer_name', 'country', 'purchase_date', 'amount', 'currency']
 
 export function PurchasesPage() {
   const [filters, setFilters] = useState<PurchaseFilterValues>(EMPTY_FILTERS)
@@ -26,9 +29,33 @@ export function PurchasesPage() {
     setOffset(0)
   }
 
+  const handleExport = () => {
+    const items = data?.items ?? []
+    const rows = items.map((item) => [
+      item.id ?? '',
+      item.customer_name,
+      item.country,
+      item.purchase_date,
+      item.amount,
+      item.currency,
+    ])
+    const blob = new Blob([toCsv(CSV_HEADERS, rows)], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = 'purchases.csv'
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div>
-      <h1 className="text-xl font-semibold text-slate-900">Purchases</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-semibold text-slate-900">Purchases</h1>
+        <Button variant="secondary" onClick={handleExport} disabled={!data?.items.length}>
+          Export CSV
+        </Button>
+      </div>
 
       <div className="mt-4">
         <PurchaseFilters values={filters} onChange={handleFiltersChange} />
