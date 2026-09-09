@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: react
+  namespace: purchases
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: react
+  template:
+    metadata:
+      labels:
+        app: react
+    spec:
+      containers:
+        - name: react
+          image: ghcr.io/YOUR_GITHUB_USERNAME/purchases-react:latest  # replaced by `make deploy`
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: purchases-config
+                  key: API_URL
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
