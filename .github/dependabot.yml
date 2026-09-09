@@ -12,6 +12,12 @@ updates:
       interval: weekly
     labels: [dependencies, python]
 
+  - package-ecosystem: npm
+    directory: /react
+    schedule:
+      interval: weekly
+    labels: [dependencies, javascript]
+
   - package-ecosystem: docker
     directory: /fastapi
     schedule:
@@ -20,6 +26,12 @@ updates:
 
   - package-ecosystem: docker
     directory: /streamlit
+    schedule:
+      interval: weekly
+    labels: [dependencies, docker]
+
+  - package-ecosystem: docker
+    directory: /react
     schedule:
       interval: weekly
     labels: [dependencies, docker]
