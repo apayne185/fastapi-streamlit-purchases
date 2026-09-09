@@ -26,9 +26,9 @@ export async function createPurchase(purchase: Purchase): Promise<Purchase> {
 export async function bulkUploadPurchases(file: File): Promise<BulkUploadResult> {
   const form = new FormData()
   form.append('file', file)
-  const { data } = await apiClient.post<BulkUploadResult>('/purchase/bulk/', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
+  // No explicit Content-Type: axios/the browser set multipart/form-data with
+  // the correct boundary automatically for a FormData body.
+  const { data } = await apiClient.post<BulkUploadResult>('/purchase/bulk/', form)
   return data
 }
 
