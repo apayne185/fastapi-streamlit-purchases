@@ -11,10 +11,10 @@ import os
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from sqlalchemy import select, func, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from prometheus_fastapi_instrumentator import Instrumentator
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -34,7 +34,11 @@ from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 
 from database import get_db, AsyncSessionLocal, engine
 from models import PurchaseRecord, UserRecord
-from auth import Token, User, authenticate_user, create_access_token, get_current_user, get_user, create_user
+from auth import (
+    Token, User, authenticate_user,
+    create_access_token, create_refresh_token, verify_refresh_token,
+    get_current_user, require_admin, get_user, create_user,
+)
 
 # --- OpenTelemetry tracing ---
 _otlp_endpoint = os.getenv("OTLP_ENDPOINT", "")
@@ -121,6 +125,14 @@ SUPPORTED_CURRENCIES = {"USD", "EUR", "GBP", "JPY", "CAD", "AUD", "CHF", "SEK", 
 
 
 # --- Pydantic schemas ---
+class ErrorDetail(BaseModel):
+    detail: str
+
+
+class BulkUploadResult(BaseModel):
+    added: int
+
+
 class Purchase(BaseModel):
     id: Optional[int] = None
     customer_name: str
@@ -134,13 +146,20 @@ class Purchase(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class PurchasePage(BaseModel):
+    items: List[Purchase]
+    total: int
+    limit: int
+    offset: int
+
+
 # --- Health / readiness ---
 @app.get("/healthz", tags=["ops"])
 def health_check():
     return {"status": "healthy"}
 
 
-@app.get("/readyz", tags=["ops"])
+@app.get("/readyz", tags=["ops"], responses={503: {"model": ErrorDetail, "description": "Database not ready"}})
 async def readiness_check(db: AsyncSession = Depends(get_db)):
     try:
         await db.execute(text("SELECT 1"))
@@ -155,15 +174,54 @@ class RegisterRequest(BaseModel):
     password: str
 
 
-@app.post("/token", response_model=Token, tags=["auth"])
+@app.post(
+    "/token",
+    response_model=Token,
+    tags=["auth"],
+    responses={401: {"model": ErrorDetail, "description": "Incorrect username or password"}},
+)
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
     user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
         raise HTTPException(status_code=401, detail="Incorrect username or password")
-    return Token(access_token=create_access_token(user.username), token_type="bearer")
+    return Token(
+        access_token=create_access_token(user.username),
+        refresh_token=create_refresh_token(user.username),
+        token_type="bearer",
+    )
 
 
-@app.post("/register", response_model=User, tags=["auth"])
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+@app.post(
+    "/token/refresh",
+    response_model=Token,
+    tags=["auth"],
+    responses={401: {"model": ErrorDetail, "description": "Invalid or expired refresh token"}},
+)
+async def refresh_token(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
+    username = verify_refresh_token(req.refresh_token)
+    record = await get_user(db, username)
+    if not record:
+        raise HTTPException(status_code=401, detail="User not found")
+    return Token(
+        access_token=create_access_token(username),
+        refresh_token=create_refresh_token(username),
+        token_type="bearer",
+    )
+
+
+@app.post(
+    "/register",
+    response_model=User,
+    tags=["auth"],
+    responses={
+        400: {"model": ErrorDetail, "description": "Validation error (username/password too short)"},
+        409: {"model": ErrorDetail, "description": "Username already taken"},
+    },
+)
 async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
     if len(req.username.strip()) < 3:
         raise HTTPException(status_code=400, detail="Username must be at least 3 characters")
@@ -173,18 +231,35 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=409, detail="Username already taken")
     result = await db.execute(select(func.count()).select_from(UserRecord))
     role = "admin" if result.scalar() == 0 else "user"
-    record = await create_user(db, req.username.strip(), req.password, role=role)
+    try:
+        record = await create_user(db, req.username.strip(), req.password, role=role)
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Username already taken")
     logger.info(f"New user registered: {record.username} (role={record.role})")
     return User(username=record.username, role=record.role)
 
 
-@app.get("/users/me", response_model=User, tags=["auth"])
+@app.get(
+    "/users/me",
+    response_model=User,
+    tags=["auth"],
+    responses={401: {"model": ErrorDetail, "description": "Invalid or expired token"}},
+)
 async def read_current_user(current_user: User = Depends(get_current_user)):
     return current_user
 
 
 # --- Purchase endpoints ---
-@app.post("/purchase/", response_model=Purchase, tags=["purchases"])
+@app.post(
+    "/purchase/",
+    response_model=Purchase,
+    tags=["purchases"],
+    responses={
+        400: {"model": ErrorDetail, "description": "Unsupported currency"},
+        401: {"model": ErrorDetail, "description": "Not authenticated"},
+    },
+)
 async def add_purchase(purchase: Purchase, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
     currency = purchase.currency.upper()
     if currency not in SUPPORTED_CURRENCIES:
@@ -203,7 +278,15 @@ async def add_purchase(purchase: Purchase, db: AsyncSession = Depends(get_db), _
     return record
 
 
-@app.post("/purchase/bulk/", tags=["purchases"])
+@app.post(
+    "/purchase/bulk/",
+    response_model=BulkUploadResult,
+    tags=["purchases"],
+    responses={
+        400: {"model": ErrorDetail, "description": "Invalid file format or malformed CSV row"},
+        401: {"model": ErrorDetail, "description": "Not authenticated"},
+    },
+)
 async def add_bulk_purchases(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
     if file.content_type not in ["text/csv"]:
         raise HTTPException(status_code=400, detail="Invalid file format")
@@ -217,11 +300,15 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: AsyncSession = De
             raw_currency = (row.get("currency") or "USD").strip().upper()
             if raw_currency not in SUPPORTED_CURRENCIES:
                 raw_currency = "USD"
+            amount = float(row["amount"].strip())
+            if amount <= 0:
+                await db.rollback()
+                raise HTTPException(status_code=400, detail=f"Amount must be greater than zero, got {amount}")
             record = PurchaseRecord(
                 customer_name=row["customer_name"].strip(),
                 country=row["country"].strip(),
                 purchase_date=datetime.strptime(row["purchase_date"].strip(), "%Y-%m-%d").date(),
-                amount=float(row["amount"].strip()),
+                amount=amount,
                 currency=raw_currency,
             )
             db.add(record)
@@ -238,10 +325,10 @@ async def add_bulk_purchases(file: UploadFile = File(...), db: AsyncSession = De
     except Exception:
         pass
     logger.info(f"Bulk upload: {len(new_records)} purchases added")
-    return JSONResponse(content={"added": len(new_records)})
+    return BulkUploadResult(added=len(new_records))
 
 
-@app.get("/purchases/", response_model=List[Purchase], tags=["purchases"])
+@app.get("/purchases/", response_model=PurchasePage, tags=["purchases"])
 @limiter.limit("100/minute")
 async def get_purchases(
     request: Request,
@@ -252,23 +339,55 @@ async def get_purchases(
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    stmt = select(PurchaseRecord).where(PurchaseRecord.deleted_at.is_(None))
+    base = select(PurchaseRecord).where(PurchaseRecord.deleted_at.is_(None))
     if country:
-        stmt = stmt.where(PurchaseRecord.country.ilike(country))
+        base = base.where(PurchaseRecord.country.ilike(country))
     if start_date:
-        stmt = stmt.where(PurchaseRecord.purchase_date >= start_date)
+        base = base.where(PurchaseRecord.purchase_date >= start_date)
     if end_date:
-        stmt = stmt.where(PurchaseRecord.purchase_date <= end_date)
-    stmt = stmt.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset)
-    result = await db.execute(stmt)
-    return result.scalars().all()
+        base = base.where(PurchaseRecord.purchase_date <= end_date)
+
+    count_result = await db.execute(select(func.count()).select_from(base.subquery()))
+    total = count_result.scalar()
+
+    items_result = await db.execute(
+        base.order_by(PurchaseRecord.purchase_date.desc()).limit(limit).offset(offset)
+    )
+    return PurchasePage(items=items_result.scalars().all(), total=total, limit=limit, offset=offset)
 
 
-@app.delete("/purchase/{purchase_id}", tags=["purchases"])
+@app.get(
+    "/purchase/{purchase_id}",
+    response_model=Purchase,
+    tags=["purchases"],
+    responses={404: {"model": ErrorDetail, "description": "Purchase not found"}},
+)
+async def get_purchase(purchase_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(PurchaseRecord).where(
+            PurchaseRecord.id == purchase_id,
+            PurchaseRecord.deleted_at.is_(None),
+        )
+    )
+    record = result.scalar_one_or_none()
+    if not record:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    return record
+
+
+@app.delete(
+    "/purchase/{purchase_id}",
+    tags=["purchases"],
+    responses={
+        401: {"model": ErrorDetail, "description": "Not authenticated"},
+        403: {"model": ErrorDetail, "description": "Admin access required"},
+        404: {"model": ErrorDetail, "description": "Purchase not found"},
+    },
+)
 async def delete_purchase(
     purchase_id: int,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
 ):
     result = await db.execute(
         select(PurchaseRecord).where(
@@ -291,7 +410,14 @@ async def delete_purchase(
     return {"message": f"Purchase {purchase_id} deleted"}
 
 
-@app.get("/purchases/kpis", tags=["purchases"])
+@app.get(
+    "/purchases/kpis",
+    tags=["purchases"],
+    responses={
+        400: {"model": ErrorDetail, "description": "Not enough data for forecast"},
+        404: {"model": ErrorDetail, "description": "No purchase data"},
+    },
+)
 @limiter.limit("30/minute")
 async def get_kpis(
     request: Request,
@@ -339,7 +465,7 @@ async def get_kpis(
     result_data = {
         "mean_purchases_per_client": avg_per_client,
         "clients_per_country": country_counts,
-        "sales_forecast": sales_forecast if forecast_days else "Not requested",
+        "sales_forecast": sales_forecast,
     }
 
     if cache and not forecast_days:

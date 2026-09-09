@@ -41,7 +41,9 @@ def _do_login(username: str, password: str):
         st.sidebar.error("Cannot reach the API.")
         return
     if resp.status_code == 200:
-        st.session_state.token = resp.json()["access_token"]
+        data = resp.json()
+        st.session_state.token = data["access_token"]
+        st.session_state.refresh_token = data["refresh_token"]
         st.session_state.username = username
         st.rerun()
     else:
@@ -75,8 +77,28 @@ def _do_register(username: str, password: str, confirm: str):
         st.sidebar.error(resp.json().get("detail", "Registration failed."))
 
 
+def _try_refresh() -> bool:
+    """Attempt a silent token refresh. Returns True if successful."""
+    rt = st.session_state.get("refresh_token")
+    if not rt:
+        return False
+    try:
+        resp = requests.post(f"{API_URL}/token/refresh", json={"refresh_token": rt}, timeout=10)
+    except requests.exceptions.ConnectionError:
+        return False
+    if resp.status_code == 200:
+        data = resp.json()
+        st.session_state.token = data["access_token"]
+        st.session_state.refresh_token = data["refresh_token"]
+        return True
+    return False
+
+
 def _handle_401():
+    if _try_refresh():
+        st.rerun()
     st.session_state.pop("token", None)
+    st.session_state.pop("refresh_token", None)
     st.session_state.pop("username", None)
     st.warning("Your session has expired. Please sign in again.")
     st.rerun()
@@ -115,6 +137,7 @@ if st.session_state.get("token"):
     st.sidebar.success(f"Signed in as **{st.session_state.username}**")
     if st.sidebar.button("Sign out"):
         st.session_state.pop("token", None)
+        st.session_state.pop("refresh_token", None)
         st.session_state.pop("username", None)
         st.rerun()
 else:
@@ -274,7 +297,9 @@ elif tab == "Analyze Purchases":
         st.error("Failed to fetch data")
         st.stop()
 
-    data = response.json()
+    page = response.json()
+    data = page["items"]
+    total = page["total"]
 
     if not data:
         st.info("No purchases found for the selected filters.")
@@ -293,9 +318,10 @@ elif tab == "Analyze Purchases":
     sym = display_currency
 
     current_page = st.session_state.page_offset // page_size + 1
+    total_pages = max(1, -(-total // page_size))  # ceiling division
     st.caption(
         f"Showing {st.session_state.page_offset + 1}–{st.session_state.page_offset + len(df):,} "
-        f"(page {current_page}) — amounts in {display_currency}"
+        f"of {total:,} (page {current_page} of {total_pages}) — amounts in {display_currency}"
     )
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total Revenue", f"{sym} {df['amount_display'].sum():,.2f}")
@@ -309,7 +335,7 @@ elif tab == "Analyze Purchases":
             st.session_state.page_offset = max(0, st.session_state.page_offset - page_size)
             st.rerun()
     with next_col:
-        if st.button("Next →", disabled=len(df) < page_size):
+        if st.button("Next →", disabled=st.session_state.page_offset + len(df) >= total):
             st.session_state.page_offset += page_size
             st.rerun()
 
@@ -472,7 +498,7 @@ elif tab == "Analyze Purchases":
                 fig.update_layout(coloraxis_showscale=False, xaxis_title=None)
                 st.plotly_chart(fig, use_container_width=True)
 
-        if kpi.get("sales_forecast") and kpi["sales_forecast"] != "Not requested":
+        if kpi.get("sales_forecast"):
             st.subheader(f"Sales Forecast — Next {forecast_days} Days")
             df_forecast = pd.DataFrame(
                 kpi["sales_forecast"].items(), columns=["Day", "Projected Revenue ($)"]

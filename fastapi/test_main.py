@@ -143,16 +143,18 @@ def test_get_purchases(auth_headers, sample_purchase):
     client.post("/purchase/", json=sample_purchase, headers=auth_headers)
     response = client.get("/purchases/")
     assert response.status_code == 200
-    assert len(response.json()) == 1
+    body = response.json()
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
 
 
 def test_get_purchases_with_filters(auth_headers, sample_csv):
     client.post("/purchase/bulk/", files={"file": ("purchases.csv", sample_csv, "text/csv")}, headers=auth_headers)
     response = client.get("/purchases/?country=Canada&start_date=2024-12-02&end_date=2024-12-10")
     assert response.status_code == 200
-    data = response.json()
-    assert isinstance(data, list)
-    assert all(p["country"].lower() == "canada" for p in data)
+    body = response.json()
+    assert "items" in body and "total" in body
+    assert all(p["country"].lower() == "canada" for p in body["items"])
 
 
 def test_get_kpis(auth_headers, sample_purchase):
@@ -171,13 +173,43 @@ def test_get_kpis_with_forecast():
 def test_get_purchases_empty():
     response = client.get("/purchases/")
     assert response.status_code == 200
-    assert response.json() == []
+    body = response.json()
+    assert body["items"] == []
+    assert body["total"] == 0
 
 
 def test_bulk_upload_invalid_content_type(auth_headers):
     files = {"file": ("data.txt", b"not,csv,data", "text/plain")}
     response = client.post("/purchase/bulk/", files=files, headers=auth_headers)
     assert response.status_code == 400
+
+
+def test_bulk_upload_negative_amount(auth_headers):
+    csv_data = b"customer_name,country,purchase_date,amount,currency\nAlice,USA,2024-12-05,-50.0,USD"
+    response = client.post("/purchase/bulk/", files={"file": ("f.csv", csv_data, "text/csv")}, headers=auth_headers)
+    assert response.status_code == 400
+
+
+def test_bulk_upload_zero_amount(auth_headers):
+    csv_data = b"customer_name,country,purchase_date,amount,currency\nAlice,USA,2024-12-05,0.0,USD"
+    response = client.post("/purchase/bulk/", files={"file": ("f.csv", csv_data, "text/csv")}, headers=auth_headers)
+    assert response.status_code == 400
+
+
+# --- Single purchase fetch ---
+
+def test_get_purchase_by_id(auth_headers, sample_purchase):
+    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    purchase_id = add_resp.json()["id"]
+    resp = client.get(f"/purchase/{purchase_id}")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == purchase_id
+    assert resp.json()["customer_name"] == sample_purchase["customer_name"]
+
+
+def test_get_purchase_by_id_not_found():
+    resp = client.get("/purchase/99999")
+    assert resp.status_code == 404
 
 
 # --- Soft Delete ---
@@ -189,7 +221,7 @@ def test_delete_purchase(auth_headers, sample_purchase):
     assert del_resp.status_code == 200
     assert "deleted" in del_resp.json()["message"]
     get_resp = client.get("/purchases/")
-    assert all(p["id"] != purchase_id for p in get_resp.json())
+    assert all(p["id"] != purchase_id for p in get_resp.json()["items"])
 
 
 def test_delete_purchase_unauthenticated(auth_headers, sample_purchase):
@@ -199,9 +231,63 @@ def test_delete_purchase_unauthenticated(auth_headers, sample_purchase):
     assert del_resp.status_code == 401
 
 
+def test_delete_purchase_forbidden_for_non_admin(auth_headers, sample_purchase):
+    add_resp = client.post("/purchase/", json=sample_purchase, headers=auth_headers)
+    purchase_id = add_resp.json()["id"]
+    # register a second user — gets role=user (not admin)
+    client.post("/register", json={"username": "regularuser", "password": "testpass123"})
+    login = client.post("/token", data={"username": "regularuser", "password": "testpass123"})
+    user_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    del_resp = client.delete(f"/purchase/{purchase_id}", headers=user_headers)
+    assert del_resp.status_code == 403
+
+
 def test_delete_purchase_not_found(auth_headers):
     del_resp = client.delete("/purchase/99999", headers=auth_headers)
     assert del_resp.status_code == 404
+
+
+# --- Token refresh ---
+
+def test_login_returns_refresh_token():
+    client.post("/register", json={"username": "refreshuser", "password": "testpass123"})
+    resp = client.post("/token", data={"username": "refreshuser", "password": "testpass123"})
+    assert resp.status_code == 200
+    assert "refresh_token" in resp.json()
+    assert "access_token" in resp.json()
+
+
+def test_refresh_token_success():
+    client.post("/register", json={"username": "refreshuser2", "password": "testpass123"})
+    login_resp = client.post("/token", data={"username": "refreshuser2", "password": "testpass123"})
+    refresh_token = login_resp.json()["refresh_token"]
+    resp = client.post("/token/refresh", json={"refresh_token": refresh_token})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "access_token" in data
+    assert "refresh_token" in data
+
+
+def test_refresh_token_rotated():
+    client.post("/register", json={"username": "refreshuser3", "password": "testpass123"})
+    login_resp = client.post("/token", data={"username": "refreshuser3", "password": "testpass123"})
+    old_refresh = login_resp.json()["refresh_token"]
+    resp = client.post("/token/refresh", json={"refresh_token": old_refresh})
+    new_refresh = resp.json()["refresh_token"]
+    assert old_refresh != new_refresh
+
+
+def test_refresh_token_invalid():
+    resp = client.post("/token/refresh", json={"refresh_token": "not.a.valid.token"})
+    assert resp.status_code == 401
+
+
+def test_refresh_token_rejects_access_token():
+    client.post("/register", json={"username": "refreshuser4", "password": "testpass123"})
+    login_resp = client.post("/token", data={"username": "refreshuser4", "password": "testpass123"})
+    access_token = login_resp.json()["access_token"]
+    resp = client.post("/token/refresh", json={"refresh_token": access_token})
+    assert resp.status_code == 401
 
 
 # --- Input validation ---
