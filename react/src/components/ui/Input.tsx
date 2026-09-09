@@ -9,7 +9,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
   { label, error, id, className = '', ...props },
   ref,
 ) {
-  const inputId = id ?? props.name
+  const inputId = id ?? props.name ?? label.toLowerCase().replace(/\s+/g, '-')
   return (
     <div className="flex flex-col gap-1">
       <label htmlFor={inputId} className="text-sm font-medium text-slate-700">
