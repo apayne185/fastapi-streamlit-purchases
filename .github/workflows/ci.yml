@@ -67,6 +67,28 @@ jobs:
       - name: Lint Streamlit
         run: ruff check streamlit/
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: react/package-lock.json
+
+      - name: Install React dependencies
+        working-directory: react
+        run: npm ci
+
+      - name: Lint React
+        working-directory: react
+        run: npm run lint
+
+      - name: Type-check React
+        working-directory: react
+        run: npx tsc -b --noEmit
+
+      - name: Test React
+        working-directory: react
+        run: npm run test
+
   validate-manifests:
     name: Validate Helm & K8s Manifests
     runs-on: ubuntu-latest
@@ -94,6 +116,7 @@ jobs:
             -f helm/values-dev.yaml \
             --set fastapi.image=ghcr.io/test/purchases-fastapi \
             --set streamlit.image=ghcr.io/test/purchases-streamlit \
+            --set react.image=ghcr.io/test/purchases-react \
           | kubeconform -strict -ignore-missing-schemas -summary
 
   docker-build:
@@ -125,6 +148,16 @@ jobs:
           cache-to: type=gha,mode=max
           load: true
 
+      - name: Build React image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./react
+          push: false
+          tags: purchases-react:test
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          load: true
+
       - name: Scan FastAPI image (Trivy)
         uses: aquasecurity/trivy-action@master
         with:
@@ -137,6 +170,14 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           image-ref: purchases-streamlit:test
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+
+      - name: Scan React image (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: purchases-react:test
           format: table
           severity: CRITICAL,HIGH
           exit-code: '0'

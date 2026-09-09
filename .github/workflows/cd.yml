@@ -67,6 +67,17 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Build and push React image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./react
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/purchases-react:${{ steps.meta.outputs.tag }}
+            ghcr.io/${{ github.repository_owner }}/purchases-react:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   # ── Environment promotion summary ──────────────────────────────────────────
   # Images are now in ghcr.io. Deployment to a real cluster would run:
   #   helm upgrade --install purchases-<env> ./helm \
@@ -74,7 +85,9 @@ jobs:
   #     --set fastapi.image=ghcr.io/$OWNER/purchases-fastapi \
   #     --set fastapi.tag=$IMAGE_TAG \
   #     --set streamlit.image=ghcr.io/$OWNER/purchases-streamlit \
-  #     --set streamlit.tag=$IMAGE_TAG
+  #     --set streamlit.tag=$IMAGE_TAG \
+  #     --set react.image=ghcr.io/$OWNER/purchases-react \
+  #     --set react.tag=$IMAGE_TAG
   #
   # Promotion path:
   #   push to main  → dev   (automatic)
@@ -91,6 +104,7 @@ jobs:
           echo "Images pushed:"
           echo "  ghcr.io/${{ github.repository_owner }}/purchases-fastapi:${{ needs.build-and-push.outputs.image_tag }}"
           echo "  ghcr.io/${{ github.repository_owner }}/purchases-streamlit:${{ needs.build-and-push.outputs.image_tag }}"
+          echo "  ghcr.io/${{ github.repository_owner }}/purchases-react:${{ needs.build-and-push.outputs.image_tag }}"
           echo ""
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "Promotion path: dev (auto on main merge)"

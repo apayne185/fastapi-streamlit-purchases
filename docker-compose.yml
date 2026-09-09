@@ -66,5 +66,17 @@ services:
     depends_on:
       - fastapi
 
+  react:
+    build: ./react
+    ports:
+      - "3000:8080"
+    environment:
+      # React is a static SPA served to the host browser, not a server-side
+      # caller like Streamlit -- API_URL must be resolvable from the browser
+      # (localhost), not the Docker-internal "fastapi" service hostname.
+      API_URL: http://localhost:8000
+    depends_on:
+      - fastapi
+
 volumes:
   postgres_data:

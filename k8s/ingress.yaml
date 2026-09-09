@@ -29,3 +29,13 @@ spec:
                 name: fastapi-service
                 port:
                   number: 8000
+    - host: react.purchases.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: react-service
+                port:
+                  number: 8080

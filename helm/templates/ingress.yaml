@@ -30,4 +30,14 @@ spec:
                 name: fastapi-service
                 port:
                   number: 8000
+    - host: {{ .Values.ingress.reactHost }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: react-service
+                port:
+                  number: 8080
 {{- end }}

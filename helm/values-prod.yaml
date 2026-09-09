@@ -27,9 +27,21 @@ streamlit:
       cpu: 1000m
       memory: 1Gi
 
+react:
+  imagePullPolicy: Always
+  replicas: 2
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
 postgres:
   storage: 10Gi
 
 ingress:
   uiHost: prod.purchases.local
   apiHost: prod.api.purchases.local
+  reactHost: prod.react.purchases.local
