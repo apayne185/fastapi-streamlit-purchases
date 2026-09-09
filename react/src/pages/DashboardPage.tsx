@@ -2,11 +2,17 @@ import { useMemo, useState } from 'react'
 
 import { parseApiError } from '../api/client'
 import { SUPPORTED_CURRENCIES, type Currency } from '../api/types'
+import { AvgPurchasePerClientTable } from '../components/dashboard/AvgPurchasePerClientTable'
+import { ClientsPerCountryChart } from '../components/dashboard/ClientsPerCountryChart'
 import { KpiTile } from '../components/dashboard/KpiTile'
 import { RevenueByCountryChart } from '../components/dashboard/RevenueByCountryChart'
 import { RevenueOverTimeChart } from '../components/dashboard/RevenueOverTimeChart'
+import { SalesForecastChart } from '../components/dashboard/SalesForecastChart'
 import { TopCustomersChart } from '../components/dashboard/TopCustomersChart'
+import { Button } from '../components/ui/Button'
+import { Input } from '../components/ui/Input'
 import { Select } from '../components/ui/Select'
+import { useKpis } from '../hooks/useKpis'
 import { usePurchases } from '../hooks/usePurchases'
 import { convertAmount } from '../lib/currency'
 
@@ -18,6 +24,11 @@ const PAGE_SIZE = 500
 export function DashboardPage() {
   const [currency, setCurrency] = useState<Currency>('USD')
   const { data, isLoading, isError, error } = usePurchases({ limit: PAGE_SIZE, offset: 0 })
+
+  const [forecastDaysInput, setForecastDaysInput] = useState(5)
+  const [kpiForecastDays, setKpiForecastDays] = useState<number | undefined>(undefined)
+  const [kpisRequested, setKpisRequested] = useState(false)
+  const kpis = useKpis(kpiForecastDays, kpisRequested)
 
   const summary = useMemo(() => {
     const items = data?.items ?? []
@@ -112,6 +123,49 @@ export function DashboardPage() {
           </div>
         </>
       )}
+
+      <div className="mt-10 border-t border-slate-200 pt-6">
+        <h2 className="text-lg font-semibold text-slate-900">KPIs &amp; Sales Forecast</h2>
+        <div className="mt-3 flex items-end gap-3">
+          <div className="w-40">
+            <Input
+              label="Forecast horizon (days)"
+              type="number"
+              min={1}
+              max={90}
+              value={forecastDaysInput}
+              onChange={(event) => setForecastDaysInput(Number(event.target.value))}
+            />
+          </div>
+          <Button
+            onClick={() => {
+              setKpiForecastDays(forecastDaysInput)
+              setKpisRequested(true)
+            }}
+            disabled={kpis.isFetching}
+          >
+            {kpis.isFetching ? 'Computing…' : 'Compute KPIs'}
+          </Button>
+        </div>
+
+        {kpis.isError && (
+          <p className="mt-4 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {parseApiError(kpis.error)}
+          </p>
+        )}
+
+        {kpis.data && (
+          <div className="mt-6 grid grid-cols-1 gap-8 lg:grid-cols-2">
+            <AvgPurchasePerClientTable data={kpis.data.mean_purchases_per_client} />
+            <ClientsPerCountryChart data={kpis.data.clients_per_country} />
+            {kpis.data.sales_forecast && (
+              <div className="lg:col-span-2">
+                <SalesForecastChart data={kpis.data.sales_forecast} forecastDays={forecastDaysInput} />
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }
