@@ -24,7 +24,7 @@ spec:
               valueFrom:
                 configMapKeyRef:
                   name: purchases-config
-                  key: API_URL
+                  key: REACT_API_URL
           livenessProbe:
             httpGet:
               path: /

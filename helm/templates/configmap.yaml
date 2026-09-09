@@ -9,3 +9,7 @@ data:
   REDIS_URL: redis://redis-service:6379
   OTLP_ENDPOINT: {{ .Values.telemetry.otlpEndpoint }}
   API_URL: http://fastapi-service:8000
+  # Streamlit calls FastAPI server-side (cluster-internal DNS works); React
+  # is a static SPA served to the browser, which needs the public ingress
+  # host instead -- browsers can't resolve fastapi-service.
+  REACT_API_URL: http://{{ .Values.ingress.apiHost }}
