@@ -6,10 +6,11 @@ LOCAL ?= true
 GITHUB_USER ?= $(shell git remote get-url origin 2>/dev/null | sed -E 's|.*github\.com[:/]([^/]+)/.*|\1|')
 IMAGE_FASTAPI   := ghcr.io/$(GITHUB_USER)/purchases-fastapi
 IMAGE_STREAMLIT := ghcr.io/$(GITHUB_USER)/purchases-streamlit
+IMAGE_REACT     := ghcr.io/$(GITHUB_USER)/purchases-react
 
 # When LOCAL=true, override imagePullPolicy to Never so Minikube uses local images
 ifeq ($(LOCAL),true)
-PULL_POLICY_FLAGS := --set fastapi.imagePullPolicy=Never --set streamlit.imagePullPolicy=Never
+PULL_POLICY_FLAGS := --set fastapi.imagePullPolicy=Never --set streamlit.imagePullPolicy=Never --set react.imagePullPolicy=Never
 else
 PULL_POLICY_FLAGS :=
 endif
@@ -20,9 +21,10 @@ endif
 all: start build deploy hosts
 	@echo ""
 	@echo "Stack is up. Access:"
-	@echo "  Dashboard : http://$(shell grep -m1 'purchases.local' /etc/hosts | awk '{print $$2}' || echo 'purchases.local')"
-	@echo "  API docs  : http://api.purchases.local/docs"
-	@echo "  Metrics   : http://api.purchases.local/metrics"
+	@echo "  Dashboard (Streamlit) : http://$(shell grep -m1 'purchases.local' /etc/hosts | awk '{print $$2}' || echo 'purchases.local')"
+	@echo "  Dashboard (React)     : http://react.purchases.local"
+	@echo "  API docs              : http://api.purchases.local/docs"
+	@echo "  Metrics               : http://api.purchases.local/metrics"
 
 ## ── Prerequisite check ───────────────────────────────────────────────────────
 doctor:
@@ -71,7 +73,8 @@ start:
 build:
 	eval $$(minikube docker-env) && \
 	docker build ./fastapi -t $(IMAGE_FASTAPI):latest && \
-	docker build ./streamlit -t $(IMAGE_STREAMLIT):latest
+	docker build ./streamlit -t $(IMAGE_STREAMLIT):latest && \
+	docker build ./react -t $(IMAGE_REACT):latest
 	@echo "→ Images built into Minikube"
 
 ## ── Helm deploy (default ENV=dev) ────────────────────────────────────────────
@@ -81,6 +84,7 @@ deploy:
 		-f helm/values-$(ENV).yaml \
 		--set fastapi.image=$(IMAGE_FASTAPI) \
 		--set streamlit.image=$(IMAGE_STREAMLIT) \
+		--set react.image=$(IMAGE_REACT) \
 		$(PULL_POLICY_FLAGS) \
 		--create-namespace
 	@echo "→ Deployed to ENV=$(ENV) — run 'make status ENV=$(ENV)' to monitor pods"
@@ -97,9 +101,9 @@ prod:
 ## ── /etc/hosts ────────────────────────────────────────────────────────────────
 hosts:
 	@MINIKUBE_IP=$$(minikube ip) && \
-	echo "$$MINIKUBE_IP purchases.local api.purchases.local \
-	dev.purchases.local dev.api.purchases.local \
-	uat.purchases.local uat.api.purchases.local" | sudo tee -a /etc/hosts
+	echo "$$MINIKUBE_IP purchases.local api.purchases.local react.purchases.local \
+	dev.purchases.local dev.api.purchases.local dev.react.purchases.local \
+	uat.purchases.local uat.api.purchases.local uat.react.purchases.local" | sudo tee -a /etc/hosts
 	@echo "→ /etc/hosts updated"
 
 ## ── Observability ─────────────────────────────────────────────────────────────
